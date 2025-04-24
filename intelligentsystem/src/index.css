@@ -1,0 +1,11 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Custom styles for react-toastify */
+.Toastify__close-button {
+  display: flex; /* Use flexbox */
+  align-items: center; /* Vertically center the icon */
+  justify-content: center; /* Horizontally center (optional, but good practice) */
+  align-self: center; /* Ensure the button itself aligns center in the toast flex container */
+}
