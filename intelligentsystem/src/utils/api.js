@@ -1,10 +1,7 @@
 import axios from 'axios';
-import { mockDetectionLogs } from './mockData';
 
 const API_URL = 'http://localhost:5000/api';
-
-// Simulate API delay for mock data
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const BASE_URL = 'http://localhost:5000'; // Add base URL for image paths
 
 export const api = {
   // Persons API - Real MongoDB Connection
@@ -20,7 +17,14 @@ export const api = {
 
   addPerson: async (person) => {
     try {
-      const response = await axios.post(`${API_URL}/persons`, person);
+      // Check if person is a FormData object, and if so, use the correct content-type
+      const config = person instanceof FormData ? {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      } : {};
+      
+      const response = await axios.post(`${API_URL}/persons`, person, config);
       return { data: response.data };
     } catch (error) {
       console.error('Error adding person:', error);
@@ -30,7 +34,14 @@ export const api = {
 
   updatePerson: async (id, updates) => {
     try {
-      const response = await axios.put(`${API_URL}/persons/${id}`, updates);
+      // Check if updates is a FormData object, and if so, use the correct content-type
+      const config = updates instanceof FormData ? {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      } : {};
+      
+      const response = await axios.put(`${API_URL}/persons/${id}`, updates, config);
       return { data: response.data };
     } catch (error) {
       console.error('Error updating person:', error);
@@ -74,13 +85,13 @@ export const api = {
 
   // Settings API
   updateSettings: async (settings) => {
-    await delay(500);
+    // Remove delay since we no longer have mock data
     localStorage.setItem('settings', JSON.stringify(settings));
     return { data: settings };
   },
 
   getSettings: async () => {
-    await delay(500);
+    // Remove delay since we no longer have mock data
     const settings = localStorage.getItem('settings');
     return { data: settings ? JSON.parse(settings) : {} };
   },

@@ -3,27 +3,35 @@ const mongoose = require('mongoose');
 const PersonSchema = new mongoose.Schema({
   name: {
     type: String,
-    required: true,
-    trim: true
+    required: [true, 'Name is required'],
+    trim: true,
   },
   cmsId: {
     type: String,
-    required: true,
+    required: [true, 'CMS ID is required'],
+    unique: true, // Ensuring uniqueness
     trim: true,
-    unique: true
   },
-  image: {
-    type: String,
-    default: 'https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_1280.png'
+  frontImage: {
+    type: String, // Store path or URL
+    required: [true, 'Front image is required'],
+  },
+  leftImage: {
+    type: String, // Store path or URL
+    required: false, // Optional
+  },
+  rightImage: {
+    type: String, // Store path or URL
+    required: false, // Optional
   },
   status: {
     type: String,
     enum: ['allowed', 'banned'],
-    default: 'allowed'
+    default: 'allowed',
   },
   lastSeen: {
     type: Date,
-    default: Date.now
+    default: Date.now,
   }
 }, { timestamps: true });
 

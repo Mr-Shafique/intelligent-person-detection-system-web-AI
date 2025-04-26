@@ -2,15 +2,29 @@ import { useState, useEffect, useRef } from 'react';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import Card from '../components/Card';
-import { mockPersons } from '../utils/mockData';
+import { api } from '../utils/api';
 
 const LiveStream = () => {
   const videoRef = useRef(null);
   const [stream, setStream] = useState(null);
   const [detectedPerson, setDetectedPerson] = useState(null);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [persons, setPersons] = useState([]);
 
   useEffect(() => {
+    // Fetch persons from the API when component mounts
+    const fetchPersons = async () => {
+      try {
+        const response = await api.getPersons();
+        setPersons(response.data);
+      } catch (error) {
+        console.error('Error fetching persons:', error);
+        toast.error('Error loading person data');
+      }
+    };
+    
+    fetchPersons();
+    
     return () => {
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
@@ -68,11 +82,18 @@ const LiveStream = () => {
   };
 
   const simulateDetection = () => {
-    const randomPerson = mockPersons[Math.floor(Math.random() * mockPersons.length)];
+    if (persons.length === 0) {
+      toast.warning('No persons in database to simulate detection');
+      return;
+    }
+    
+    const randomPerson = persons[Math.floor(Math.random() * persons.length)];
     setDetectedPerson(randomPerson);
     
     if (randomPerson.status === 'banned') {
-      toast.error(`Banned person detected: ${randomPerson.name}`);
+      toast.error(`⚠️ Banned person detected: ${randomPerson.name}`);
+    } else {
+      toast.success(`✓ Person detected: ${randomPerson.name}`);
     }
   };
 
@@ -131,13 +152,17 @@ const LiveStream = () => {
             <div className="md:w-1/3 lg:w-1/4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
               <h2 className="text-xl font-semibold mb-4 border-b pb-2">Detected Person</h2>
               <div className="space-y-3">
-                <img
-                  // Use a placeholder if image is missing
-                  src={detectedPerson.image || 'https://via.placeholder.com/80'}
-                  alt={detectedPerson.name}
-                  className="w-20 h-20 rounded-full mx-auto border-2 border-gray-300"
-                  onError={(e) => { e.target.onerror = null; e.target.src='https://via.placeholder.com/80'; }} // Handle broken image links
-                />
+                {detectedPerson.frontImage ? (
+                  <img
+                    src={detectedPerson.frontImage}
+                    alt={detectedPerson.name}
+                    className="w-20 h-20 rounded-full mx-auto border-2 border-gray-300 object-cover"
+                  />
+                ) : (
+                  <div className="w-20 h-20 rounded-full mx-auto flex items-center justify-center bg-gray-200 border-2 border-gray-300 text-gray-500 text-xs">
+                    No Image
+                  </div>
+                )}
                 <div className="text-center">
                   <h3 className="text-lg font-medium">{detectedPerson.name}</h3>
                   <p className={`text-sm font-semibold ${

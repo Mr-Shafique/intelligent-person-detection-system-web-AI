@@ -6,6 +6,7 @@ const authRoutes = require('./routes/auth');
 const personsRoutes = require('./routes/persons');
 const detectionRoutes = require('./routes/detections'); // Import detection routes
 const cors = require('cors');
+const path = require('path'); // Add path module
 
 const app = express();
 const PORT = 5000;
@@ -15,6 +16,9 @@ app.use(cors());
 // Increase payload size limit (e.g., 50MB)
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+// Serve static files from the uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Connect to MongoDB
 connectDB();
