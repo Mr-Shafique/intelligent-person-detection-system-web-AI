@@ -14,6 +14,7 @@ import traceback # Added traceback import
 DEEPFACE_MODEL = "VGG-Face"
 DEEPFACE_METRIC = "cosine"
 MATCH_THRESHOLD = 0.65  # Threshold for local duplicate check
+ONLINE_MATCH_THRESHOLD = 0.65 # Threshold for matching against online DB (can be adjusted)
 
 # Local Capture Config
 CAPTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captured_faces")
@@ -247,64 +248,78 @@ def load_online_faces():
     print(f"[LOAD_ONLINE] Online database refresh process complete. Final in-memory list size: {len(online_face_database)}")
 
 
-# Function to check if a face already exists in our LOCAL database
-def is_duplicate_face(face_img):
-    min_distance_found = float('inf') # Track minimum distance for debugging
-    matched_file = None # Track which file caused the minimum distance
+# Function to find a match in the ONLINE database
+def find_online_match(face_embedding):
+    """Compares a face embedding against the online database."""
+    if not online_face_database:
+        return None # No online data to compare against
+
+    min_distance = float('inf')
+    best_match = None
+
+    for entry in online_face_database:
+        stored_embedding = entry.get('embedding')
+        if stored_embedding is None:
+            continue
+
+        try:
+            distance = cosine(face_embedding, stored_embedding)
+            if distance < min_distance:
+                min_distance = distance
+                # Store potential match details if distance is low enough
+                if distance < ONLINE_MATCH_THRESHOLD:
+                    best_match = {
+                        'name': entry.get('name', 'N/A'),
+                        'status': entry.get('status', 'N/A'),
+                        'distance': distance
+                    }
+        except Exception as e:
+            print(f"[Online Match] Error calculating distance: {e}")
+            continue # Skip this entry if distance calculation fails
+
+    # Return the best match only if it was below the threshold
+    if best_match:
+        print(f"[Debug] Online Match Found: {best_match['name']} ({best_match['status']}) - Dist: {best_match['distance']:.4f}")
+        return best_match
+    else:
+        # Optional: Print min distance even if no match above threshold
+        # if min_distance != float('inf'):
+        #     print(f"[Debug] Online Match: No match above threshold. Min distance: {min_distance:.4f}")
+        return None
+
+
+# Function to check if a face already exists in our LOCAL database (accepts embedding)
+def is_local_duplicate(face_embedding):
+    """Checks if the embedding matches any in the local face_database."""
+    min_distance_found = float('inf')
+    matched_file = None
+
+    if not face_database:
+         return False
 
     try:
-        # Generate embedding for detected face from live video
-        embedding_objs = DeepFace.represent(
-            img_path=face_img,
-            model_name=DEEPFACE_MODEL,
-            enforce_detection=False,  # More permissive for webcam images
-            detector_backend='opencv',
-            align=True # Added alignment which might improve consistency
-        )
-
-        if not embedding_objs:
-            # print("[Debug] No embedding generated for current face.")
-            return False  # No face found, so can't be a duplicate
-
-        current_embedding = embedding_objs[0]['embedding']
-
-        # Compare with database (loaded from face_embeddings.pkl via load_existing_faces)
-        if not face_database: # Check if database is empty
-             # print("[Debug] Face database is empty.")
-             return False
-
-        # <<< COMPARISON HAPPENS HERE >>>
-        for stored_face in face_database: # Iterate through embeddings loaded from .pkl file
+        for stored_face in face_database:
             stored_embedding = stored_face['embedding']
+            distance = cosine(face_embedding, stored_embedding)
 
-            # Calculate similarity using the configured metric
-            if DEEPFACE_METRIC == 'cosine':
-                # Compare current embedding vs stored embedding
-                distance = cosine(current_embedding, stored_embedding)
+            if distance < min_distance_found:
+                min_distance_found = distance
+                matched_file = os.path.basename(stored_face['path'])
 
-                # Track the minimum distance found
-                if distance < min_distance_found:
-                    min_distance_found = distance
-                    matched_file = os.path.basename(stored_face['path'])
+            if distance < MATCH_THRESHOLD:
+                print(f"[Debug] Local Duplicate Check: Match found! vs {os.path.basename(stored_face['path'])} -> Distance: {distance:.4f}")
+                return True
 
-                # Check if the distance is below the threshold
-                if distance < MATCH_THRESHOLD:
-                    print(f"[Debug] Duplicate Check: Match found! Current face vs {os.path.basename(stored_face['path'])} -> Distance: {distance:.4f} (Threshold: {MATCH_THRESHOLD})")
-                    return True # Found a match from the .pkl file data
-        # <<< END OF COMPARISON LOOP >>>
-
-        # If loop completes without returning True, no duplicate was found above threshold
-        # Print the minimum distance found for debugging purposes
-        if min_distance_found != float('inf'):
-             print(f"[Debug] Duplicate Check: No match above threshold. Min distance found: {min_distance_found:.4f} (vs {matched_file})")
-        else:
-             print("[Debug] Duplicate Check: No similar faces found in DB yet.")
-
+        # If loop completes without returning True
+        # if min_distance_found != float('inf'):
+        #      print(f"[Debug] Local Duplicate Check: No match above threshold. Min distance: {min_distance_found:.4f} (vs {matched_file})")
+        # else:
+        #      print("[Debug] Local Duplicate Check: No similar faces found in local DB yet.")
         return False
 
     except Exception as e:
-        print(f"Error checking for duplicate: {e}")
-        return False  # If we can't check, assume it's not a duplicate
+        print(f"Error checking for local duplicate: {e}")
+        return False # Assume not duplicate on error
 
 
 # Initialize YOLO face detector
@@ -331,7 +346,7 @@ load_online_faces() # Call the modified function
 # Variables to track last capture time
 last_capture_time = 0
 faces_captured = 0
-duplicates_skipped = 0
+duplicates_skipped = 0 # Now counts skipped unknowns
 
 print("Starting face detection. Press 'q' to quit.")
 
@@ -353,6 +368,7 @@ try:
         # ---------------------------------
 
         current_time = time.time()
+        processed_in_interval = False # Flag to ensure only one face processed per interval
 
         # Process each detected face
         for box in boxes: # Iterate through YOLO boxes
@@ -367,11 +383,13 @@ try:
             # Draw rectangle around face using x1, y1, x2, y2
             cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-            # Check if enough time has passed since last capture
-            if current_time - last_capture_time >= CAPTURE_INTERVAL:
-                # Add padding around face (but stay within image bounds)
+            # Check if enough time has passed AND no face was processed yet in this interval
+            if not processed_in_interval and (current_time - last_capture_time >= CAPTURE_INTERVAL):
+                processed_in_interval = True # Mark that we are processing a face now
+                last_capture_time = current_time # Update time immediately
+
+                # Add padding around face
                 frame_h, frame_w = frame.shape[:2]
-                # Use x1, y1, x2, y2 for padding calculation
                 pad_x1 = max(0, x1 - FACE_PADDING)
                 pad_y1 = max(0, y1 - FACE_PADDING)
                 pad_x2 = min(frame_w, x2 + FACE_PADDING)
@@ -380,72 +398,76 @@ try:
                 # Crop face region with padding
                 face_img = frame[pad_y1:pad_y2, pad_x1:pad_x2]
 
-                # Check if this face is already in our database
-                is_duplicate = is_duplicate_face(face_img) # Call the updated function
+                # --- Generate Embedding ---
+                current_embedding = None
+                try:
+                    embedding_objs = DeepFace.represent(
+                        img_path=face_img,
+                        model_name=DEEPFACE_MODEL,
+                        enforce_detection=False,
+                        detector_backend='opencv',
+                        align=True
+                    )
+                    if embedding_objs:
+                        current_embedding = embedding_objs[0]['embedding']
+                except Exception as e:
+                    print(f"Error generating embedding for check: {e}")
+                    # Optionally display error text
+                    cv2.putText(display_frame, "Embedding Error", (x1, y1 - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    continue # Skip further checks if embedding failed
 
-                if not is_duplicate:
-                    # Generate unique filename with timestamp
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-                    filename = os.path.join(CAPTURE_DIR, f"face_{timestamp}.jpg")
-                    
-                    # Save image
-                    cv2.imwrite(filename, face_img)
-                    faces_captured += 1
-                    print(f"Captured NEW face #{faces_captured} - {os.path.basename(filename)}")
+                # --- Perform Checks if Embedding Generated ---
+                if current_embedding is not None:
+                    # 1. Check against ONLINE database
+                    online_match = find_online_match(current_embedding)
 
-                    # Add to our database IN MEMORY
-                    new_entry = None
-                    try:
-                        # Re-generate embedding for the saved image to store
-                        embedding_objs_saved = DeepFace.represent(
-                            img_path=filename, # Use the saved file path
-                            model_name=DEEPFACE_MODEL,
-                            enforce_detection=False,
-                            detector_backend='opencv',
-                            align=True # Added alignment
-                        )
-                        if embedding_objs_saved:
-                            embedding = embedding_objs_saved[0]['embedding']
+                    if online_match:
+                        # Display Name and Status from Online DB
+                        display_text = f"{online_match['name']} ({online_match['status']})"
+                        text_color = (0, 255, 0) if online_match['status'].lower() == 'allowed' else (0, 165, 255) # Green if allowed, Orange otherwise
+                        cv2.putText(display_frame, display_text, (x1, y1 - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
+                        # Do not save locally if matched online
+
+                    else:
+                        # 2. No Online Match -> Display Unknown & Check LOCAL database
+                        cv2.putText(display_frame, "Unknown", (x1, y1 - 10),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2) # Red for Unknown
+
+                        is_duplicate = is_local_duplicate(current_embedding)
+
+                        if not is_duplicate:
+                            # Save NEW UNKNOWN face locally
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                            filename = os.path.join(CAPTURE_DIR, f"face_{timestamp}.jpg")
+                            cv2.imwrite(filename, face_img)
+                            faces_captured += 1
+                            print(f"Captured NEW Unknown face #{faces_captured} - {os.path.basename(filename)}")
+
+                            # Add to local database IN MEMORY
                             new_entry = {
                                 'path': filename,
-                                'embedding': embedding
+                                'embedding': current_embedding # Use the embedding we already generated
                             }
-                            face_database.append(new_entry) # Add to in-memory list
+                            face_database.append(new_entry)
+                            save_database() # Save updated local DB immediately
                         else:
-                             print(f"Warning: Could not generate embedding for saved file {filename}")
-                    except Exception as e:
-                        print(f"Error adding face to database: {e}")
+                            # It's a duplicate of a previously captured UNKNOWN face
+                            duplicates_skipped += 1
+                            # No text needed here as "Unknown" is already displayed
 
-                    # Save the updated database to the file IMMEDIATELY
-                    if new_entry:
-                        save_database()
+            # --- End of Interval Check ---
 
-                    # Feedback on saved image (green text) - Use x1, y1 for position
-                    cv2.putText(display_frame, "New Face!", (x1, y1 - 10),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-                else:
-                    # It's a duplicate, don't save
-                    duplicates_skipped += 1
-                    # Use x1, y1 for position
-                    cv2.putText(display_frame, "Duplicate", (x1, y1 - 10),
-                               cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
-
-                # Update last capture time regardless of duplicate status
-                last_capture_time = current_time
-            else:
-                # Show "wait" message if capturing too frequently (red text) - Use x1, y1 for position
-                cv2.putText(display_frame, "Wait...", (x1, y1 - 10),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-
-        # Display stats on frame
-        cv2.putText(display_frame, f"Unique faces: {faces_captured}", (10, 25), 
+        # Display stats on frame (remains the same)
+        cv2.putText(display_frame, f"Unique faces: {faces_captured}", (10, 25),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(display_frame, f"Duplicates: {duplicates_skipped}", (10, 55), 
+        cv2.putText(display_frame, f"Duplicates: {duplicates_skipped}", (10, 55),
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        
+
         # Show the frame
         cv2.imshow('Face Detection', display_frame)
-        
+
         # Check for quit key
         if cv2.waitKey(1) & 0xFF == ord('q'):
             print("Quit requested by user")
