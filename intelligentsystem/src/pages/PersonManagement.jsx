@@ -393,7 +393,7 @@ const PersonManagement = () => {
           {/* Front Image Input */}
           <div className="space-y-1">
             <label className="block text-sm font-medium text-gray-700">
-              Front Picture <span className="text-red-500">*</span>
+              Picture <span className="text-red-500">*</span>
             </label>
             <div className="flex items-center space-x-4">
               {frontImagePreview ? (
@@ -419,7 +419,7 @@ const PersonManagement = () => {
           {/* Left Image Input */}
           <div className="space-y-1">
             <label className="block text-sm font-medium text-gray-700">
-              Left Side Picture
+              Picture
             </label>
             <div className="flex items-center space-x-4">
               {leftImagePreview ? (
@@ -430,7 +430,11 @@ const PersonManagement = () => {
                 />
               ) : (
                 <div className="h-16 w-16 rounded-full flex items-center justify-center bg-gray-100 border-2 border-gray-200 text-gray-500 text-xs">
-                  None
+                  <img 
+                  src="https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_1280.png" 
+                  alt="person"
+                  className=" rounded-full object-center" 
+                   />
                 </div>
               )}
               <input
@@ -445,7 +449,7 @@ const PersonManagement = () => {
           {/* Right Image Input */}
           <div className="space-y-1">
             <label className="block text-sm font-medium text-gray-700">
-              Right Side Picture
+              Picture
             </label>
             <div className="flex items-center space-x-4">
               {rightImagePreview ? (
