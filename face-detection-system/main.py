@@ -19,7 +19,7 @@ ONLINE_MATCH_THRESHOLD = 0.65 # Threshold for matching against online DB (can be
 # Local Capture Config
 CAPTURE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "captured_faces")
 EMBEDDINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "face_embeddings.pkl") # Local captures
-CAPTURE_INTERVAL = 0.5
+CAPTURE_INTERVAL = 0.333  # 1 image every 0.333 seconds = 3 images per second
 FACE_PADDING = 30
 
 # Online API Config
@@ -322,151 +322,232 @@ def is_local_duplicate(face_embedding):
         return False # Assume not duplicate on error
 
 
+# Camera Configuration
+WEBCAM_INDEX = 0
+IP_CAMERA_URLS = [
+    "http://10.102.130.191:8080/video",  # HTTP stream
+    "rtsp://10.102.130.191:554/live",    # RTSP stream
+    "https://10.102.130.191:8080"        # HTTPS stream (last fallback)
+]
+
+# Function to attempt IP camera connection with multiple URLs
+def try_connect_ip_camera():
+    """Try multiple connection methods for the IP camera and return the first successful one."""
+    print("Attempting to connect to IP Camera using multiple URL formats...")
+    
+    for url in IP_CAMERA_URLS:
+        print(f"Trying: {url}")
+        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)  # Use FFmpeg backend explicitly
+        
+        # Check if connection succeeded and if we can get at least one frame
+        if cap.isOpened():
+            ret, test_frame = cap.read()
+            if ret:
+                print(f"✓ Successfully connected to IP camera using: {url}")
+                return cap, url
+            else:
+                print(f"× Connection opened but couldn't read frame from: {url}")
+                cap.release()
+        else:
+            print(f"× Failed to connect using: {url}")
+    
+    # If we get here, all connection attempts failed
+    print("× All connection attempts to IP camera failed.")
+    return None, None
+
 # Initialize YOLO face detector
 print("Loading YOLOv8 face detection model...")
-model = YOLO('yolov8n-face.pt')
+model = YOLO('yolov8n-face.pt')  # Ensure the YOLO model is loaded globally
 print("YOLO model loaded.")
 
-# Initialize camera
-cap = cv2.VideoCapture(0)  # 0 = default camera (usually webcam)
-if not cap.isOpened():
-    print("Error: Could not open camera!")
+# Initialize cameras
+print(f"Initializing Webcam (Index: {WEBCAM_INDEX})...")
+cap_webcam = cv2.VideoCapture(WEBCAM_INDEX)
+if not cap_webcam.isOpened():
+    print("Error: Could not open Webcam!")
     exit(1)
+else:
+    # Set webcam resolution (optional)
+    cap_webcam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap_webcam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    print("Webcam initialized.")
 
-# Set camera resolution (optional)
-cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+print("Initializing IP Camera...")
+cap_ipcam, connected_url = try_connect_ip_camera()
+
+if cap_ipcam is None or not cap_ipcam.isOpened():
+    print("Error: Could not connect to IP Camera. Exiting...")
+    cap_webcam.release()
+    exit(1)
+else:
+    print(f"IP Camera initialized using URL: {connected_url}")
 
 # Load existing LOCAL face embeddings
 load_existing_faces()
 
 # Load/Refresh ONLINE face embeddings from API/file
-load_online_faces() # Call the modified function
+load_online_faces()
 
-# Variables to track last capture time
-last_capture_time = 0
-faces_captured = 0
-duplicates_skipped = 0 # Now counts skipped unknowns
+# Variables to track state for both cameras
+camera_states = {
+    'webcam': {'last_capture_time': 0, 'faces_captured': 0, 'duplicates_skipped': 0},
+    'ipcam': {'last_capture_time': 0, 'faces_captured': 0, 'duplicates_skipped': 0}
+}
 
-print("Starting face detection. Press 'q' to quit.")
+print("Starting dual camera face detection. Press 'q' to quit.")
+
+def process_frame(frame, camera_id, camera_state):
+    """
+    Processes a single frame for face detection, matching, and annotation.
+    Args:
+        frame: The input frame (numpy array).
+        camera_id: A string identifier for the camera (e.g., 'webcam', 'ipcam').
+        camera_state: A dictionary containing state for this camera
+                      {'last_capture_time': float, 'faces_captured': int, 'duplicates_skipped': int}
+    Returns:
+        tuple: (processed_frame, updated_camera_state)
+               processed_frame is the frame with annotations.
+               updated_camera_state contains the modified state values.
+    """
+    if frame is None:
+        print(f"[{camera_id}] Error: Received None frame for processing.")
+        # Return a placeholder or handle appropriately
+        # For simplicity, returning a black frame of a default size
+        return np.zeros((480, 640, 3), dtype=np.uint8), camera_state
+
+    display_frame = frame.copy()
+    current_time = time.time()
+    processed_in_interval = False  # Flag for this frame processing cycle
+
+    # --- Face Detection using YOLO ---
+    try:
+        results = model(frame, verbose=False)
+        boxes = results[0].boxes.xyxy.cpu().numpy() if len(results) > 0 and results[0].boxes is not None else []
+    except Exception as e:
+        print(f"[{camera_id}] Error during YOLO detection: {e}")
+        boxes = []  # Continue with no boxes if detection fails
+
+    # Process each detected face
+    for box in boxes:
+        x1, y1, x2, y2 = map(int, box[:4])
+        w = x2 - x1
+        h = y2 - y1
+
+        if w < 20 or h < 20:
+            continue  # Skip tiny detections
+
+        cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+
+        # Check interval and if a face was already processed in this cycle for this camera
+        if not processed_in_interval and (current_time - camera_state['last_capture_time'] >= CAPTURE_INTERVAL):
+            processed_in_interval = True
+            camera_state['last_capture_time'] = current_time  # Update time immediately
+
+            # Add padding and crop face
+            frame_h, frame_w = frame.shape[:2]
+            pad_x1 = max(0, x1 - FACE_PADDING)
+            pad_y1 = max(0, y1 - FACE_PADDING)
+            pad_x2 = min(frame_w, x2 + FACE_PADDING)
+            pad_y2 = min(frame_h, y2 + FACE_PADDING)
+            face_img = frame[pad_y1:pad_y2, pad_x1:pad_x2]
+
+            if face_img.size == 0:  # Check if cropping resulted in an empty image
+                print(f"[{camera_id}] Warning: Cropped face image is empty. Skipping.")
+                continue
+
+            # --- Generate Embedding ---
+            current_embedding = None
+            try:
+                embedding_objs = DeepFace.represent(
+                    img_path=face_img, model_name=DEEPFACE_MODEL, enforce_detection=False,
+                    detector_backend='opencv', align=True
+                )
+                if embedding_objs:
+                    current_embedding = embedding_objs[0]['embedding']
+            except Exception as e:
+                print(f"[{camera_id}] Error generating embedding: {e}")
+                cv2.putText(display_frame, "Emb Err", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                continue  # Skip checks if embedding failed
+
+            # --- Perform Checks if Embedding Generated ---
+            if current_embedding is not None:
+                online_match = find_online_match(current_embedding)
+
+                if online_match:
+                    display_text = f"{online_match['name']} ({online_match['status']})"
+                    text_color = (0, 255, 0) if online_match['status'].lower() == 'allowed' else (0, 165, 255)
+                    cv2.putText(display_frame, display_text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
+                else:
+                    cv2.putText(display_frame, "Unknown", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    is_duplicate = is_local_duplicate(current_embedding)
+
+                    if not is_duplicate:
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+                        filename = os.path.join(CAPTURE_DIR, f"face_{camera_id}_{timestamp}.jpg")
+                        try:
+                            cv2.imwrite(filename, face_img)
+                            camera_state['faces_captured'] += 1
+                            print(f"[{camera_id}] Captured NEW Unknown face #{camera_state['faces_captured']} - {os.path.basename(filename)}")
+
+                            new_entry = {'path': filename, 'embedding': current_embedding}
+                            face_database.append(new_entry)  # Add to global list
+                            save_database()  # Save updated local DB
+                        except Exception as save_err:
+                            print(f"[{camera_id}] Error during face saving/DB update: {save_err}")
+                    else:
+                        camera_state['duplicates_skipped'] += 1
+
+    # Display stats on frame
+    cv2.putText(display_frame, f"Cam: {camera_id}", (10, frame.shape[0] - 40),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+    cv2.putText(display_frame, f"Unique: {camera_state['faces_captured']}", (10, frame.shape[0] - 25),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+    cv2.putText(display_frame, f"Dupes: {camera_state['duplicates_skipped']}", (10, frame.shape[0] - 10),
+               cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+
+    return display_frame, camera_state
 
 try:
     while True:
-        # Read frame from camera
-        ret, frame = cap.read()
-        if not ret:
-            print("Error: Failed to capture frame!")
-            break
+        # Read frames from both cameras
+        ret_webcam, frame_webcam = cap_webcam.read()
+        ret_ipcam, frame_ipcam = cap_ipcam.read()
 
-        # Make a copy for display
-        display_frame = frame.copy()
+        # Handle webcam frame errors
+        if not ret_webcam:
+            print("Error: Failed to capture frame from Webcam!")
+            frame_webcam = np.zeros((480, 640, 3), dtype=np.uint8)  # Placeholder frame
+            cv2.putText(frame_webcam, "Webcam Error", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
-        # --- Face Detection using YOLO ---
-        results = model(frame, verbose=False)
-        # Extract boxes in xyxy format
-        boxes = results[0].boxes.xyxy.cpu().numpy() if len(results) > 0 and results[0].boxes is not None else []
-        # ---------------------------------
+        # Handle IP camera frame errors
+        if not ret_ipcam:
+            print("Error: Failed to capture frame from IP Camera!")
+            frame_ipcam = np.zeros((480, 640, 3), dtype=np.uint8)  # Placeholder frame
+            cv2.putText(frame_ipcam, "IP Cam Error", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
 
-        current_time = time.time()
-        processed_in_interval = False # Flag to ensure only one face processed per interval
+        # Process frames independently
+        processed_frame_webcam, camera_states['webcam'] = process_frame(
+            frame_webcam if ret_webcam else None, 'webcam', camera_states['webcam']
+        )
+        processed_frame_ipcam, camera_states['ipcam'] = process_frame(
+            frame_ipcam if ret_ipcam else None, 'ipcam', camera_states['ipcam']
+        )
 
-        # Process each detected face
-        for box in boxes: # Iterate through YOLO boxes
-            x1, y1, x2, y2 = map(int, box[:4]) # Get coordinates
-            w = x2 - x1 # Calculate width
-            h = y2 - y1 # Calculate height
+        # Combine frames for display
+        h_webcam = processed_frame_webcam.shape[0]
+        h_ipcam = processed_frame_ipcam.shape[0]
 
-            # Skip tiny detections (optional)
-            if w < 20 or h < 20:
-                continue
+        # Resize frames to have the same height
+        if h_webcam != h_ipcam:
+            target_height = min(h_webcam, h_ipcam)
+            processed_frame_webcam = cv2.resize(processed_frame_webcam, (int(processed_frame_webcam.shape[1] * target_height / h_webcam), target_height))
+            processed_frame_ipcam = cv2.resize(processed_frame_ipcam, (int(processed_frame_ipcam.shape[1] * target_height / h_ipcam), target_height))
 
-            # Draw rectangle around face using x1, y1, x2, y2
-            cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        # Concatenate frames horizontally
+        combined_frame = cv2.hconcat([processed_frame_webcam, processed_frame_ipcam])
 
-            # Check if enough time has passed AND no face was processed yet in this interval
-            if not processed_in_interval and (current_time - last_capture_time >= CAPTURE_INTERVAL):
-                processed_in_interval = True # Mark that we are processing a face now
-                last_capture_time = current_time # Update time immediately
-
-                # Add padding around face
-                frame_h, frame_w = frame.shape[:2]
-                pad_x1 = max(0, x1 - FACE_PADDING)
-                pad_y1 = max(0, y1 - FACE_PADDING)
-                pad_x2 = min(frame_w, x2 + FACE_PADDING)
-                pad_y2 = min(frame_h, y2 + FACE_PADDING)
-
-                # Crop face region with padding
-                face_img = frame[pad_y1:pad_y2, pad_x1:pad_x2]
-
-                # --- Generate Embedding ---
-                current_embedding = None
-                try:
-                    embedding_objs = DeepFace.represent(
-                        img_path=face_img,
-                        model_name=DEEPFACE_MODEL,
-                        enforce_detection=False,
-                        detector_backend='opencv',
-                        align=True
-                    )
-                    if embedding_objs:
-                        current_embedding = embedding_objs[0]['embedding']
-                except Exception as e:
-                    print(f"Error generating embedding for check: {e}")
-                    # Optionally display error text
-                    cv2.putText(display_frame, "Embedding Error", (x1, y1 - 10),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                    continue # Skip further checks if embedding failed
-
-                # --- Perform Checks if Embedding Generated ---
-                if current_embedding is not None:
-                    # 1. Check against ONLINE database
-                    online_match = find_online_match(current_embedding)
-
-                    if online_match:
-                        # Display Name and Status from Online DB
-                        display_text = f"{online_match['name']} ({online_match['status']})"
-                        text_color = (0, 255, 0) if online_match['status'].lower() == 'allowed' else (0, 165, 255) # Green if allowed, Orange otherwise
-                        cv2.putText(display_frame, display_text, (x1, y1 - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
-                        # Do not save locally if matched online
-
-                    else:
-                        # 2. No Online Match -> Display Unknown & Check LOCAL database
-                        cv2.putText(display_frame, "Unknown", (x1, y1 - 10),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2) # Red for Unknown
-
-                        is_duplicate = is_local_duplicate(current_embedding)
-
-                        if not is_duplicate:
-                            # Save NEW UNKNOWN face locally
-                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
-                            filename = os.path.join(CAPTURE_DIR, f"face_{timestamp}.jpg")
-                            cv2.imwrite(filename, face_img)
-                            faces_captured += 1
-                            print(f"Captured NEW Unknown face #{faces_captured} - {os.path.basename(filename)}")
-
-                            # Add to local database IN MEMORY
-                            new_entry = {
-                                'path': filename,
-                                'embedding': current_embedding # Use the embedding we already generated
-                            }
-                            face_database.append(new_entry)
-                            save_database() # Save updated local DB immediately
-                        else:
-                            # It's a duplicate of a previously captured UNKNOWN face
-                            duplicates_skipped += 1
-                            # No text needed here as "Unknown" is already displayed
-
-            # --- End of Interval Check ---
-
-        # Display stats on frame (remains the same)
-        cv2.putText(display_frame, f"Unique faces: {faces_captured}", (10, 25),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-        cv2.putText(display_frame, f"Duplicates: {duplicates_skipped}", (10, 55),
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
-        # Show the frame
-        cv2.imshow('Face Detection', display_frame)
+        # Display the combined frame
+        cv2.imshow('Dual Camera Face Detection', combined_frame)
 
         # Check for quit key
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -476,9 +557,14 @@ try:
 finally:
     # Release resources
     print("Cleaning up...")
-    cap.release()
+    if cap_webcam.isOpened():
+        cap_webcam.release()
+        print("Webcam released.")
+    if cap_ipcam.isOpened():
+        cap_ipcam.release()
+        print("IP Camera released.")
     cv2.destroyAllWindows()
     print(f"Session summary:")
-    print(f"- Unique faces captured: {faces_captured}")
-    print(f"- Duplicates skipped: {duplicates_skipped}")
+    print(f"- Webcam Unique: {camera_states['webcam']['faces_captured']}, Duplicates: {camera_states['webcam']['duplicates_skipped']}")
+    print(f"- IP Cam Unique: {camera_states['ipcam']['faces_captured']}, Duplicates: {camera_states['ipcam']['duplicates_skipped']}")
     print(f"Images saved to: {os.path.abspath(CAPTURE_DIR)}")
