@@ -255,15 +255,10 @@ const PersonManagement = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <h1 className="text-2xl font-bold">Person Management</h1>
-        <Button onClick={() => openModal()}>Add New Person</Button>
-      </div>
-
+      <div className="flex  gap-4 justify-around  flex-column  py-4">
       {/* Search Row */}
-      <div className="w-full">
-        <div className="relative">
-          <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none">
+        <div className="relative flex flex-1">
+          <div className="absolute inset-y-0 pl-2 left-0 flex items-center  pointer-events-none">
             <svg className="w-4 h-4 text-gray-500" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 20">
               <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m19 19-4-4m0-7A7 7 0 1 1 1 8a7 7 0 0 1 14 0Z"/>
             </svg>
@@ -274,14 +269,17 @@ const PersonManagement = () => {
             placeholder="Search by name or CMS ID..."
             value={searchTerm}
             onChange={handleSearchChange}
-          />
+            />
         </div>
         {searchTerm && (
           <p className="mt-2 text-sm text-gray-500">
             Found {filteredPersons.length} {filteredPersons.length === 1 ? 'result' : 'results'} for "{searchTerm}"
           </p>
         )}
-      </div>
+        <div className='flex flex-2'>
+        <Button onClick={() => openModal()}>Add New Person</Button>
+        </div>
+        </div>
 
       <Card className="p-4">
         <div className="overflow-x-auto">

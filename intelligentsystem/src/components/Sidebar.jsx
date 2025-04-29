@@ -13,16 +13,16 @@ const Sidebar = () => {
   ];
 
   return (
-    <div className={`bg-gray-800 text-white h-screen fixed left-0 top-0 transition-all duration-300 ${isCollapsed ? 'w-30' : 'w-64'}`}>
+    <div className={`bg-gray-800 text-white h-screen fixed left-0 top-0 transition-all duration-300 flex-1 flex flex-row`}>
       <div className="p-5">
         <div className="flex justify-between items-center mb-8">
-          {!isCollapsed && <h2 className="text-2xl font-bold">Menu</h2>}
-          <button
+          {<h2 className="text-2xl font-bold">Menu</h2>}
+          {/* <button
             onClick={() => setIsCollapsed(!isCollapsed)}
             className="text-gray-300 hover:text-white p-2 rounded-lg hover:bg-gray-700"
           >
             {isCollapsed ? '→' : '←'}
-          </button>
+          </button> */}
         </div>
         <nav className="space-y-2">
           {navItems.map((item) => (

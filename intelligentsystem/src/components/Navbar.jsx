@@ -13,9 +13,9 @@ const Navbar = () => {
       <div className="px-4">
         <div className="flex justify-between h-16">
           <div className="flex">
-            <div className="flex-shrink-0 flex items-center">
+            <div className="flex-shrink-0 flex items-center pl-4">
               <span className="text-xl font-bold text-indigo-600">
-                Intelligent System
+                Intelligent Person Detection System
               </span>
             </div>
           </div>
