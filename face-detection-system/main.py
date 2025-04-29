@@ -325,9 +325,9 @@ def is_local_duplicate(face_embedding):
 # Camera Configuration
 WEBCAM_INDEX = 0
 IP_CAMERA_URLS = [
-    "http://10.102.130.191:8080/video",  # HTTP stream
-    "rtsp://10.102.130.191:554/live",    # RTSP stream
-    "https://10.102.130.191:8080"        # HTTPS stream (last fallback)
+    "http://10.102.164.70:8080/video",  # HTTP stream
+    "rtsp://10.102.164.70:554/live",    # RTSP stream
+    "https://10.102.164.70:8080"        # HTTPS stream (last fallback)
 ]
 
 # Function to attempt IP camera connection with multiple URLs
