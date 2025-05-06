@@ -320,7 +320,11 @@ const PersonManagement = () => {
                       />
                     ) : (
                       <div className="h-16 w-16 rounded-full flex items-center justify-center bg-gray-100 border-2 border-gray-200 text-gray-500 text-xs">
-                        None
+                         <img 
+                  src="https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_1280.png" 
+                  alt="person"
+                  className=" rounded-full object-center" 
+                   />
                       </div>
                     )}
                   </td>
@@ -402,7 +406,11 @@ const PersonManagement = () => {
                 />
               ) : (
                 <div className="h-16 w-16 rounded-full flex items-center justify-center bg-gray-100 border-2 border-gray-200 text-gray-500 text-xs">
-                  None
+                   <img 
+                  src="https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_1280.png" 
+                  alt="person"
+                  className=" rounded-full object-center" 
+                   />
                 </div>
               )}
               <input
@@ -458,7 +466,11 @@ const PersonManagement = () => {
                 />
               ) : (
                 <div className="h-16 w-16 rounded-full flex items-center justify-center bg-gray-100 border-2 border-gray-200 text-gray-500 text-xs">
-                  None
+                   <img 
+                  src="https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_1280.png" 
+                  alt="person"
+                  className=" rounded-full object-center" 
+                   />
                 </div>
               )}
               <input

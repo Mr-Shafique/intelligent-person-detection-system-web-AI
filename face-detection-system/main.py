@@ -363,24 +363,29 @@ print("YOLO model loaded.")
 # Initialize cameras
 print(f"Initializing Webcam (Index: {WEBCAM_INDEX})...")
 cap_webcam = cv2.VideoCapture(WEBCAM_INDEX)
-if not cap_webcam.isOpened():
-    print("Error: Could not open Webcam!")
-    exit(1)
-else:
+webcam_available = cap_webcam.isOpened()
+
+if webcam_available:
     # Set webcam resolution (optional)
     cap_webcam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap_webcam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     print("Webcam initialized.")
+else:
+    print("Warning: Webcam not available!")
 
 print("Initializing IP Camera...")
 cap_ipcam, connected_url = try_connect_ip_camera()
+ipcam_available = cap_ipcam is not None and cap_ipcam.isOpened()
 
-if cap_ipcam is None or not cap_ipcam.isOpened():
-    print("Error: Could not connect to IP Camera. Exiting...")
-    cap_webcam.release()
-    exit(1)
-else:
+if ipcam_available:
     print(f"IP Camera initialized using URL: {connected_url}")
+else:
+    print("Warning: IP Camera not available!")
+
+# Ensure at least one camera is available
+if not webcam_available and not ipcam_available:
+    print("Error: No cameras are available. Exiting...")
+    exit(1)
 
 # Load existing LOCAL face embeddings
 load_existing_faces()
@@ -394,7 +399,7 @@ camera_states = {
     'ipcam': {'last_capture_time': 0, 'faces_captured': 0, 'duplicates_skipped': 0}
 }
 
-print("Starting dual camera face detection. Press 'q' to quit.")
+print("Starting face detection. Press 'q' to quit.")
 
 def process_frame(frame, camera_id, camera_state):
     """
@@ -510,28 +515,35 @@ def process_frame(frame, camera_id, camera_state):
 try:
     while True:
         # Read frames from both cameras
-        ret_webcam, frame_webcam = cap_webcam.read()
-        ret_ipcam, frame_ipcam = cap_ipcam.read()
+        frame_webcam = None
+        frame_ipcam = None
 
-        # Handle webcam frame errors
-        if not ret_webcam:
-            print("Error: Failed to capture frame from Webcam!")
-            frame_webcam = np.zeros((480, 640, 3), dtype=np.uint8)  # Placeholder frame
-            cv2.putText(frame_webcam, "Webcam Error", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        if webcam_available:
+            ret_webcam, frame_webcam = cap_webcam.read()
+            if not ret_webcam:
+                print("Warning: Failed to capture frame from Webcam!")
+                frame_webcam = None
 
-        # Handle IP camera frame errors
-        if not ret_ipcam:
-            print("Error: Failed to capture frame from IP Camera!")
-            frame_ipcam = np.zeros((480, 640, 3), dtype=np.uint8)  # Placeholder frame
-            cv2.putText(frame_ipcam, "IP Cam Error", (50, 240), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
+        if ipcam_available:
+            ret_ipcam, frame_ipcam = cap_ipcam.read()
+            if not ret_ipcam:
+                print("Warning: Failed to capture frame from IP Camera!")
+                frame_ipcam = None
 
-        # Process frames independently
-        processed_frame_webcam, camera_states['webcam'] = process_frame(
-            frame_webcam if ret_webcam else None, 'webcam', camera_states['webcam']
-        )
-        processed_frame_ipcam, camera_states['ipcam'] = process_frame(
-            frame_ipcam if ret_ipcam else None, 'ipcam', camera_states['ipcam']
-        )
+        # Process frames independently if available
+        if frame_webcam is not None:
+            processed_frame_webcam, camera_states['webcam'] = process_frame(
+                frame_webcam, 'webcam', camera_states['webcam']
+            )
+        else:
+            processed_frame_webcam = np.zeros((480, 640, 3), dtype=np.uint8)  # Placeholder frame
+
+        if frame_ipcam is not None:
+            processed_frame_ipcam, camera_states['ipcam'] = process_frame(
+                frame_ipcam, 'ipcam', camera_states['ipcam']
+            )
+        else:
+            processed_frame_ipcam = np.zeros((480, 640, 3), dtype=np.uint8)  # Placeholder frame
 
         # Combine frames for display
         h_webcam = processed_frame_webcam.shape[0]
@@ -547,7 +559,7 @@ try:
         combined_frame = cv2.hconcat([processed_frame_webcam, processed_frame_ipcam])
 
         # Display the combined frame
-        cv2.imshow('Dual Camera Face Detection', combined_frame)
+        cv2.imshow('Face Detection', combined_frame)
 
         # Check for quit key
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -557,10 +569,10 @@ try:
 finally:
     # Release resources
     print("Cleaning up...")
-    if cap_webcam.isOpened():
+    if webcam_available and cap_webcam.isOpened():
         cap_webcam.release()
         print("Webcam released.")
-    if cap_ipcam.isOpened():
+    if ipcam_available and cap_ipcam.isOpened():
         cap_ipcam.release()
         print("IP Camera released.")
     cv2.destroyAllWindows()
