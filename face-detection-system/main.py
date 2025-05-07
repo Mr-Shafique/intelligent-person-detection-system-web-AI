@@ -7,8 +7,9 @@ from deepface import DeepFace
 from scipy.spatial.distance import cosine
 from ultralytics import YOLO
 import pickle
-import requests # Added requests import
-import traceback # Added traceback import
+import requests
+import traceback
+import base64  # Add this import for encoding images
 
 # --- Configuration ---
 DEEPFACE_MODEL = "VGG-Face"
@@ -26,30 +27,28 @@ FACE_PADDING = 30
 ONLINE_EMBEDDINGS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "online_face_embeddings.pkl") # Online data
 API_ENDPOINT = "http://localhost:5000/api/persons"
 BACKEND_URL = "http://localhost:5000" # Base URL for images
+DETECTIONS_API_ENDPOINT = "http://localhost:5000/api/detections"  # Add this for detection log endpoint
 
 # Storage for face embeddings
 face_database = []  # Local captures: {path: str, embedding: np.array}
-online_face_database = [] # Online data: {name: str, cmsId: str, status: str, embedding: np.array}
+online_face_database = [] # Online data: {name: str, cmsId: str, status: str, _id: str, embedding: np.array}
 
 # Create output directory
 os.makedirs(CAPTURE_DIR, exist_ok=True)
 print(f"Images will be saved to: {os.path.abspath(CAPTURE_DIR)}")
-print(f"Embeddings database file: {os.path.abspath(EMBEDDINGS_FILE)}") # Added path confirmation
-print(f"Online embeddings database file: {os.path.abspath(ONLINE_EMBEDDINGS_FILE)}") # Added path confirmation
+print(f"Embeddings database file: {os.path.abspath(EMBEDDINGS_FILE)}")
+print(f"Online embeddings database file: {os.path.abspath(ONLINE_EMBEDDINGS_FILE)}")
 
 # Function to save the LOCAL database to a file
 def save_database():
     try:
         with open(EMBEDDINGS_FILE, 'wb') as f:
             pickle.dump(face_database, f)
-        # print(f"[Debug] Database saved with {len(face_database)} entries.") # Optional debug print
     except Exception as e:
         print(f"Error saving database to {EMBEDDINGS_FILE}: {e}")
 
 # Function to save the ONLINE database to a file
 def save_online_database():
-    # Print the state of the list JUST BEFORE saving - Ensure this is commented out
-    # print(f"[SAVE_ONLINE] Data to be saved (Size: {len(online_face_database)}): {online_face_database}")
     print(f"[SAVE_ONLINE] Attempting to save {len(online_face_database)} entries to {ONLINE_EMBEDDINGS_FILE}")
     try:
         with open(ONLINE_EMBEDDINGS_FILE, 'wb') as f:
@@ -64,27 +63,23 @@ def load_existing_faces():
     global face_database
     database_updated = False
     known_paths = set()
-    file_existed_initially = os.path.exists(EMBEDDINGS_FILE) # Check if file exists before loading
+    file_existed_initially = os.path.exists(EMBEDDINGS_FILE)
 
-    # 1. Try loading from pickle file
     if file_existed_initially:
         try:
             with open(EMBEDDINGS_FILE, 'rb') as f:
                 face_database = pickle.load(f)
             print(f"Loaded {len(face_database)} embeddings from {EMBEDDINGS_FILE}")
-            # Populate known_paths from the loaded database
             for entry in face_database:
                 known_paths.add(entry.get('path'))
         except Exception as e:
             print(f"Error loading database from {EMBEDDINGS_FILE}: {e}. Initializing empty database.")
             face_database = []
-            # Consider the file corrupt/unusable, treat as if it didn't exist for saving purposes
             file_existed_initially = False
     else:
         print(f"Embeddings file {EMBEDDINGS_FILE} not found. Initializing empty database.")
         face_database = []
 
-    # 2. Scan CAPTURE_DIR for images not in the loaded database
     print(f"Scanning {CAPTURE_DIR} for new faces...")
     new_faces_found = 0
     for filename in os.listdir(CAPTURE_DIR):
@@ -93,11 +88,9 @@ def load_existing_faces():
 
         filepath = os.path.join(CAPTURE_DIR, filename)
 
-        # Check if this image path is already in our database
         if filepath in known_paths:
-            continue # Skip if already loaded/processed
+            continue
 
-        # If not known, process it
         print(f"Processing new image: {filename}")
         new_faces_found += 1
         try:
@@ -115,8 +108,8 @@ def load_existing_faces():
                     'path': filepath,
                     'embedding': embedding
                 })
-                known_paths.add(filepath) # Add to known paths immediately
-                database_updated = True # Mark database as updated
+                known_paths.add(filepath)
+                database_updated = True
                 if new_faces_found % 10 == 0:
                      print(f"Added {new_faces_found} new faces to database...")
             else:
@@ -127,13 +120,12 @@ def load_existing_faces():
 
     print(f"Found and processed {new_faces_found} new faces from directory scan.")
 
-    # 3. Save the database if it was updated OR if the file didn't exist initially
     if database_updated:
         print("Database was updated by scan, saving changes...")
         save_database()
     elif not file_existed_initially:
         print(f"Embeddings file did not exist, creating it now (even if empty)...")
-        save_database() # Save even if empty to create the file
+        save_database()
 
     print(f"Database ready with {len(face_database)} total entries.")
 
@@ -141,24 +133,21 @@ def load_existing_faces():
 # Function to load ONLINE face embeddings from API and file (Modified to always refresh from API)
 def load_online_faces():
     global online_face_database
-    # Always start with an empty database for online faces to refresh completely
     online_face_database = []
-    # Confirm the list is empty right after initialization
     print(f"[LOAD_ONLINE] Initialized empty online face database. Current size: {len(online_face_database)}")
 
-    # 1. Fetch data from API
     print(f"[LOAD_ONLINE] Fetching person data from API: {API_ENDPOINT}")
-    persons_data = [] # Default to empty list
+    persons_data = []
     try:
         response = requests.get(API_ENDPOINT, timeout=20)
-        print(f"[LOAD_ONLINE] API response status code: {response.status_code}") # Debug status code
-        response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
+        print(f"[LOAD_ONLINE] API response status code: {response.status_code}")
+        response.raise_for_status()
         persons_data = response.json()
         print(f"[LOAD_ONLINE] Received data for {len(persons_data)} persons from API.")
 
         if not isinstance(persons_data, list):
              print(f"[LOAD_ONLINE] Error: API response is not a list. Received type: {type(persons_data)}")
-             persons_data = [] # Treat as empty if format is wrong
+             persons_data = []
 
     except requests.exceptions.RequestException as e:
         print(f"[LOAD_ONLINE] FATAL: Error fetching data from API ({API_ENDPOINT}): {e}")
@@ -166,8 +155,6 @@ def load_online_faces():
         print(f"[LOAD_ONLINE] FATAL: Error processing API response: {e}")
         traceback.print_exc()
 
-
-    # 2. Process ALL persons from API response
     api_faces_processed_count = 0
     image_fields = ['frontImage', 'leftImage', 'rightImage']
 
@@ -175,21 +162,21 @@ def load_online_faces():
     for i, person in enumerate(persons_data):
         cmsId = person.get('cmsId')
         name = person.get('name')
-        status = person.get('status', 'unknown') # Default status if missing
-        print(f"[LOAD_ONLINE] Person {i+1}/{len(persons_data)}: ID={cmsId}, Name={name}") # Debug each person
-
-        if not cmsId or not name:
-            print(f"  [LOAD_ONLINE] Warning: Skipping person due to missing cmsId or name: {person}")
+        status = person.get('status', 'unknown')
+        person_mongo_id = person.get('_id')
+        print(f"[LOAD_ONLINE] Person {i+1}/{len(persons_data)}: ID={cmsId}, Name={name}, MongoDB_ID={person_mongo_id}")
+        if not cmsId or not name or not person_mongo_id:
+            print(f"  [LOAD_ONLINE] Warning: Skipping person due to missing cmsId, name, or _id: {person}")
             continue
 
         person_embeddings_added = 0
-        valid_image_found = False # Track if any valid image URL exists for this person
+        valid_image_found = False
         for field in image_fields:
             relative_image_path = person.get(field)
             if not relative_image_path:
                 continue
 
-            valid_image_found = True # Mark that at least one image URL exists
+            valid_image_found = True
             image_url = f"{BACKEND_URL}{relative_image_path}"
 
             try:
@@ -202,7 +189,6 @@ def load_online_faces():
                     print(f"    [LOAD_ONLINE] Warning: Could not decode image from {image_url}")
                     continue
 
-                # Generate embedding (enforce detection for known API faces)
                 embedding_objs = DeepFace.represent(
                     img_path=img,
                     model_name=DEEPFACE_MODEL,
@@ -213,9 +199,8 @@ def load_online_faces():
 
                 if embedding_objs:
                     embedding = embedding_objs[0]['embedding']
-                    # Append directly to the fresh online_face_database
                     online_face_database.append({
-                        'name': name, 'cmsId': cmsId, 'status': status,
+                        'name': name, 'cmsId': cmsId, 'status': status, '_id': person_mongo_id,
                         'embedding': embedding, 'source_image': relative_image_path
                     })
                     api_faces_processed_count += 1
@@ -229,30 +214,24 @@ def load_online_faces():
             except Exception as img_proc_err:
                 print(f"    [LOAD_ONLINE] Error processing image {image_url}: {img_proc_err}")
 
-        # Add more detail if no embeddings were added for this person
         if person_embeddings_added == 0:
              if not valid_image_found:
                  print(f"  [LOAD_ONLINE] -> No embeddings generated for {name} ({cmsId}) because no valid image URLs were found in API data.")
              else:
                  print(f"  [LOAD_ONLINE] -> No embeddings generated for {name} ({cmsId}) despite trying images. Check warnings above (decode/detection failures).")
 
-
     print(f"[LOAD_ONLINE] Finished processing API data. Generated {api_faces_processed_count} embeddings this run.")
-    # Print the size AGAIN just before calling save
     print(f"[LOAD_ONLINE] Final in-memory online_face_database size before save: {len(online_face_database)}")
 
-    # 3. Always save the newly generated online database, overwriting the old file
-    save_online_database() # Call the function with added debug prints
+    save_online_database()
 
-    # Add a final confirmation print AFTER the save call returns
     print(f"[LOAD_ONLINE] Online database refresh process complete. Final in-memory list size: {len(online_face_database)}")
 
 
 # Function to find a match in the ONLINE database
 def find_online_match(face_embedding):
-    """Compares a face embedding against the online database."""
     if not online_face_database:
-        return None # No online data to compare against
+        return None
 
     min_distance = float('inf')
     best_match = None
@@ -266,31 +245,27 @@ def find_online_match(face_embedding):
             distance = cosine(face_embedding, stored_embedding)
             if distance < min_distance:
                 min_distance = distance
-                # Store potential match details if distance is low enough
                 if distance < ONLINE_MATCH_THRESHOLD:
                     best_match = {
                         'name': entry.get('name', 'N/A'),
                         'status': entry.get('status', 'N/A'),
+                        '_id': entry.get('_id'),
+                        'cmsId': entry.get('cmsId', 'N/A'),
                         'distance': distance
                     }
         except Exception as e:
             print(f"[Online Match] Error calculating distance: {e}")
-            continue # Skip this entry if distance calculation fails
+            continue
 
-    # Return the best match only if it was below the threshold
     if best_match:
         print(f"[Debug] Online Match Found: {best_match['name']} ({best_match['status']}) - Dist: {best_match['distance']:.4f}")
         return best_match
     else:
-        # Optional: Print min distance even if no match above threshold
-        # if min_distance != float('inf'):
-        #     print(f"[Debug] Online Match: No match above threshold. Min distance: {min_distance:.4f}")
         return None
 
 
 # Function to check if a face already exists in our LOCAL database (accepts embedding)
 def is_local_duplicate(face_embedding):
-    """Checks if the embedding matches any in the local face_database."""
     min_distance_found = float('inf')
     matched_file = None
 
@@ -310,36 +285,29 @@ def is_local_duplicate(face_embedding):
                 print(f"[Debug] Local Duplicate Check: Match found! vs {os.path.basename(stored_face['path'])} -> Distance: {distance:.4f}")
                 return True
 
-        # If loop completes without returning True
-        # if min_distance_found != float('inf'):
-        #      print(f"[Debug] Local Duplicate Check: No match above threshold. Min distance: {min_distance_found:.4f} (vs {matched_file})")
-        # else:
-        #      print("[Debug] Local Duplicate Check: No similar faces found in local DB yet.")
         return False
 
     except Exception as e:
         print(f"Error checking for local duplicate: {e}")
-        return False # Assume not duplicate on error
+        return False
 
 
 # Camera Configuration
 WEBCAM_INDEX = 0
 IP_CAMERA_URLS = [
-    "http://10.102.164.70:8080/video",  # HTTP stream
-    "rtsp://10.102.164.70:554/live",    # RTSP stream
-    "https://10.102.164.70:8080"        # HTTPS stream (last fallback)
+    "http://10.102.164.70:8080/video",
+    "rtsp://10.102.164.70:554/live",
+    "https://10.102.164.70:8080"
 ]
 
 # Function to attempt IP camera connection with multiple URLs
 def try_connect_ip_camera():
-    """Try multiple connection methods for the IP camera and return the first successful one."""
     print("Attempting to connect to IP Camera using multiple URL formats...")
     
     for url in IP_CAMERA_URLS:
         print(f"Trying: {url}")
-        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)  # Use FFmpeg backend explicitly
+        cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG)
         
-        # Check if connection succeeded and if we can get at least one frame
         if cap.isOpened():
             ret, test_frame = cap.read()
             if ret:
@@ -351,13 +319,12 @@ def try_connect_ip_camera():
         else:
             print(f"× Failed to connect using: {url}")
     
-    # If we get here, all connection attempts failed
     print("× All connection attempts to IP camera failed.")
     return None, None
 
 # Initialize YOLO face detector
 print("Loading YOLOv8 face detection model...")
-model = YOLO('yolov8n-face.pt')  # Ensure the YOLO model is loaded globally
+model = YOLO('yolov8n-face.pt')
 print("YOLO model loaded.")
 
 # Initialize cameras
@@ -366,7 +333,6 @@ cap_webcam = cv2.VideoCapture(WEBCAM_INDEX)
 webcam_available = cap_webcam.isOpened()
 
 if webcam_available:
-    # Set webcam resolution (optional)
     cap_webcam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
     cap_webcam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     print("Webcam initialized.")
@@ -382,18 +348,13 @@ if ipcam_available:
 else:
     print("Warning: IP Camera not available!")
 
-# Ensure at least one camera is available
 if not webcam_available and not ipcam_available:
     print("Error: No cameras are available. Exiting...")
     exit(1)
 
-# Load existing LOCAL face embeddings
 load_existing_faces()
-
-# Load/Refresh ONLINE face embeddings from API/file
 load_online_faces()
 
-# Variables to track state for both cameras
 camera_states = {
     'webcam': {'last_capture_time': 0, 'faces_captured': 0, 'duplicates_skipped': 0},
     'ipcam': {'last_capture_time': 0, 'faces_captured': 0, 'duplicates_skipped': 0}
@@ -402,53 +363,35 @@ camera_states = {
 print("Starting face detection. Press 'q' to quit.")
 
 def process_frame(frame, camera_id, camera_state):
-    """
-    Processes a single frame for face detection, matching, and annotation.
-    Args:
-        frame: The input frame (numpy array).
-        camera_id: A string identifier for the camera (e.g., 'webcam', 'ipcam').
-        camera_state: A dictionary containing state for this camera
-                      {'last_capture_time': float, 'faces_captured': int, 'duplicates_skipped': int}
-    Returns:
-        tuple: (processed_frame, updated_camera_state)
-               processed_frame is the frame with annotations.
-               updated_camera_state contains the modified state values.
-    """
     if frame is None:
         print(f"[{camera_id}] Error: Received None frame for processing.")
-        # Return a placeholder or handle appropriately
-        # For simplicity, returning a black frame of a default size
         return np.zeros((480, 640, 3), dtype=np.uint8), camera_state
 
     display_frame = frame.copy()
     current_time = time.time()
-    processed_in_interval = False  # Flag for this frame processing cycle
+    processed_in_interval = False
 
-    # --- Face Detection using YOLO ---
     try:
         results = model(frame, verbose=False)
         boxes = results[0].boxes.xyxy.cpu().numpy() if len(results) > 0 and results[0].boxes is not None else []
     except Exception as e:
         print(f"[{camera_id}] Error during YOLO detection: {e}")
-        boxes = []  # Continue with no boxes if detection fails
+        boxes = []
 
-    # Process each detected face
     for box in boxes:
         x1, y1, x2, y2 = map(int, box[:4])
         w = x2 - x1
         h = y2 - y1
 
         if w < 20 or h < 20:
-            continue  # Skip tiny detections
+            continue
 
         cv2.rectangle(display_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
-        # Check interval and if a face was already processed in this cycle for this camera
         if not processed_in_interval and (current_time - camera_state['last_capture_time'] >= CAPTURE_INTERVAL):
             processed_in_interval = True
-            camera_state['last_capture_time'] = current_time  # Update time immediately
+            camera_state['last_capture_time'] = current_time
 
-            # Add padding and crop face
             frame_h, frame_w = frame.shape[:2]
             pad_x1 = max(0, x1 - FACE_PADDING)
             pad_y1 = max(0, y1 - FACE_PADDING)
@@ -456,11 +399,10 @@ def process_frame(frame, camera_id, camera_state):
             pad_y2 = min(frame_h, y2 + FACE_PADDING)
             face_img = frame[pad_y1:pad_y2, pad_x1:pad_x2]
 
-            if face_img.size == 0:  # Check if cropping resulted in an empty image
+            if face_img.size == 0:
                 print(f"[{camera_id}] Warning: Cropped face image is empty. Skipping.")
                 continue
 
-            # --- Generate Embedding ---
             current_embedding = None
             try:
                 embedding_objs = DeepFace.represent(
@@ -472,9 +414,8 @@ def process_frame(frame, camera_id, camera_state):
             except Exception as e:
                 print(f"[{camera_id}] Error generating embedding: {e}")
                 cv2.putText(display_frame, "Emb Err", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-                continue  # Skip checks if embedding failed
+                continue
 
-            # --- Perform Checks if Embedding Generated ---
             if current_embedding is not None:
                 online_match = find_online_match(current_embedding)
 
@@ -482,6 +423,27 @@ def process_frame(frame, camera_id, camera_state):
                     display_text = f"{online_match['name']} ({online_match['status']})"
                     text_color = (0, 255, 0) if online_match['status'].lower() == 'allowed' else (0, 165, 255)
                     cv2.putText(display_frame, display_text, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
+
+                    person_mongo_id = online_match.get('_id')
+                    if person_mongo_id:
+                        try:
+                            _, buffer = cv2.imencode('.jpg', face_img)
+                            jpg_as_text = base64.b64encode(buffer).decode('utf-8')
+                            captured_image_data = f"data:image/jpeg;base64,{jpg_as_text}"
+                            log_payload = {
+                                "personId": person_mongo_id,
+                                "location": camera_id,
+                                "capturedImage": captured_image_data
+                            }
+                            response = requests.post(DETECTIONS_API_ENDPOINT, json=log_payload, timeout=10)
+                            response.raise_for_status()
+                            print(f"[{camera_id}] Successfully sent detection log for {online_match['name']} to backend.")
+                        except requests.exceptions.RequestException as req_err:
+                            print(f"[{camera_id}] Error sending detection log for {online_match['name']}: {req_err}")
+                        except Exception as e:
+                            print(f"[{camera_id}] General error during detection log sending: {e}")
+                    else:
+                        print(f"[{camera_id}] Cannot send log: MongoDB _id missing for matched person {online_match.get('name')}")
                 else:
                     cv2.putText(display_frame, "Unknown", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                     is_duplicate = is_local_duplicate(current_embedding)
@@ -495,14 +457,13 @@ def process_frame(frame, camera_id, camera_state):
                             print(f"[{camera_id}] Captured NEW Unknown face #{camera_state['faces_captured']} - {os.path.basename(filename)}")
 
                             new_entry = {'path': filename, 'embedding': current_embedding}
-                            face_database.append(new_entry)  # Add to global list
-                            save_database()  # Save updated local DB
+                            face_database.append(new_entry)
+                            save_database()
                         except Exception as save_err:
                             print(f"[{camera_id}] Error during face saving/DB update: {save_err}")
                     else:
                         camera_state['duplicates_skipped'] += 1
 
-    # Display stats on frame
     cv2.putText(display_frame, f"Cam: {camera_id}", (10, frame.shape[0] - 40),
                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
     cv2.putText(display_frame, f"Unique: {camera_state['faces_captured']}", (10, frame.shape[0] - 25),
@@ -514,7 +475,6 @@ def process_frame(frame, camera_id, camera_state):
 
 try:
     while True:
-        # Read frames from both cameras
         frame_webcam = None
         frame_ipcam = None
 
@@ -530,44 +490,37 @@ try:
                 print("Warning: Failed to capture frame from IP Camera!")
                 frame_ipcam = None
 
-        # Process frames independently if available
         if frame_webcam is not None:
             processed_frame_webcam, camera_states['webcam'] = process_frame(
                 frame_webcam, 'webcam', camera_states['webcam']
             )
         else:
-            processed_frame_webcam = np.zeros((480, 640, 3), dtype=np.uint8)  # Placeholder frame
+            processed_frame_webcam = np.zeros((480, 640, 3), dtype=np.uint8)
 
         if frame_ipcam is not None:
             processed_frame_ipcam, camera_states['ipcam'] = process_frame(
                 frame_ipcam, 'ipcam', camera_states['ipcam']
             )
         else:
-            processed_frame_ipcam = np.zeros((480, 640, 3), dtype=np.uint8)  # Placeholder frame
+            processed_frame_ipcam = np.zeros((480, 640, 3), dtype=np.uint8)
 
-        # Combine frames for display
         h_webcam = processed_frame_webcam.shape[0]
         h_ipcam = processed_frame_ipcam.shape[0]
 
-        # Resize frames to have the same height
         if h_webcam != h_ipcam:
             target_height = min(h_webcam, h_ipcam)
             processed_frame_webcam = cv2.resize(processed_frame_webcam, (int(processed_frame_webcam.shape[1] * target_height / h_webcam), target_height))
             processed_frame_ipcam = cv2.resize(processed_frame_ipcam, (int(processed_frame_ipcam.shape[1] * target_height / h_ipcam), target_height))
 
-        # Concatenate frames horizontally
         combined_frame = cv2.hconcat([processed_frame_webcam, processed_frame_ipcam])
 
-        # Display the combined frame
         cv2.imshow('Face Detection', combined_frame)
 
-        # Check for quit key
         if cv2.waitKey(1) & 0xFF == ord('q'):
             print("Quit requested by user")
             break
 
 finally:
-    # Release resources
     print("Cleaning up...")
     if webcam_available and cap_webcam.isOpened():
         cap_webcam.release()
