@@ -62,7 +62,7 @@ const Settings = () => {
             </label>
           </div>
 
-          <div className="space-y-2">
+          {/* <div className="space-y-2">
             <label className="block text-sm font-medium text-gray-700">
               Camera Source
             </label>
@@ -76,9 +76,9 @@ const Settings = () => {
               <option value="ip">IP Camera</option>
               <option value="usb">USB Camera</option>
             </select>
-          </div>
+          </div> */}
 
-          <div className="space-y-2">
+          {/* <div className="space-y-2">
             <label className="block text-sm font-medium text-gray-700">
               Detection Sensitivity
             </label>
@@ -96,7 +96,7 @@ const Settings = () => {
               <span>{settings.detectionSensitivity}%</span>
               <span>High</span>
             </div>
-          </div>
+          </div> */}
         </div>
       </Card>
     </div>
