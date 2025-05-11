@@ -1,6 +1,0 @@
-opencv-python-headless==4.8.0.74
-numpy==1.24.4
-deepface==0.0.79
-scipy==1.11.2
-ultralytics==8.0.117
-requests==2.31.0

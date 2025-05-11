@@ -1,0 +1,54 @@
+[
+    {
+        "_id": "6819af05ad2cc088c41a1462",
+        "name": "Hassan Ali",
+        "cmsId": "023-23-3145",
+        "frontImage": "/uploads/persons/frontImage-1746513669289-596378138.jpg",
+        "leftImage": "/uploads/persons/leftImage-1746513669291-159021956.jpg",
+        "rightImage": "/uploads/persons/rightImage-1746513669293-746808059.jpg",
+        "status": "allowed",
+        "lastSeen": "2025-05-06T06:41:09.412Z",
+        "createdAt": "2025-05-06T06:41:09.414Z",
+        "updatedAt": "2025-05-06T06:41:09.414Z",
+        "__v": 0
+    },
+    {
+        "_id": "6819ae90ad2cc088c41a145e",
+        "name": "Muhammad Ramzan",
+        "cmsId": "023-23-0237",
+        "frontImage": "/uploads/persons/frontImage-1746513552215-740416980.jpg",
+        "leftImage": "/uploads/persons/leftImage-1746513552216-603116541.jpg",
+        "rightImage": "/uploads/persons/rightImage-1746513552219-411768473.jpg",
+        "status": "allowed",
+        "lastSeen": "2025-05-06T06:39:12.335Z",
+        "createdAt": "2025-05-06T06:39:12.340Z",
+        "updatedAt": "2025-05-06T06:39:12.340Z",
+        "__v": 0
+    },
+    {
+        "_id": "680f384a0f8b9ca326a2487f",
+        "name": "noor",
+        "cmsId": "023-20-0183",
+        "frontImage": "/uploads/persons/frontImage-1745827914215-197817905.jpg",
+        "leftImage": "/uploads/persons/leftImage-1745827914225-810776755.jpg",
+        "rightImage": "/uploads/persons/rightImage-1745827914230-997840882.jpg",
+        "status": "banned",
+        "lastSeen": "2025-04-28T08:11:54.852Z",
+        "createdAt": "2025-04-28T08:11:54.859Z",
+        "updatedAt": "2025-05-06T06:32:13.587Z",
+        "__v": 0
+    },
+    {
+        "_id": "680e85b3106e0bb5618f33d8",
+        "name": "shafique",
+        "cmsId": "023-20-0179",
+        "frontImage": "/uploads/persons/frontImage-1746958366545-913405200.jpg",
+        "leftImage": "/uploads/persons/leftImage-1746958366546-102933577.jpg",
+        "rightImage": "/uploads/persons/rightImage-1746958366549-207037661.jpg",
+        "status": "banned",
+        "lastSeen": "2025-04-27T19:29:55.662Z",
+        "createdAt": "2025-04-27T19:29:55.664Z",
+        "updatedAt": "2025-05-11T10:12:46.658Z",
+        "__v": 0
+    }
+]
