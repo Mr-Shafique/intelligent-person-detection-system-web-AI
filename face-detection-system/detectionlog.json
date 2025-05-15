@@ -78,5 +78,29 @@
         "action": "OUT",
         "camera_source": "ipcam",
         "image_saved": null
+    },
+    {
+        "timestamp": "2025-05-15T13:29:08.369755Z",
+        "person_cmsId": "Unknown",
+        "person_name": "Unknown",
+        "action": "OUT",
+        "camera_source": "ipcam",
+        "image_saved": null
+    },
+    {
+        "timestamp": "2025-05-15T13:29:11.169710Z",
+        "person_cmsId": "Unknown",
+        "person_name": "Unknown",
+        "action": "IN",
+        "camera_source": "ipcam",
+        "image_saved": null
+    },
+    {
+        "timestamp": "2025-05-15T13:29:13.876654Z",
+        "person_cmsId": "Unknown",
+        "person_name": "Unknown",
+        "action": "OUT",
+        "camera_source": "ipcam",
+        "image_saved": null
     }
 ]
