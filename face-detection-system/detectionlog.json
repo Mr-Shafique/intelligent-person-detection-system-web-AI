@@ -1,0 +1,82 @@
+[
+    {
+        "timestamp": "2025-05-15T12:54:45.243692Z",
+        "person_cmsId": "Unknown",
+        "person_name": "Unknown",
+        "action": "IN",
+        "camera_source": "ipcam",
+        "image_saved": null
+    },
+    {
+        "timestamp": "2025-05-15T12:54:48.746215Z",
+        "person_cmsId": "Unknown",
+        "person_name": "Unknown",
+        "action": "OUT",
+        "camera_source": "ipcam",
+        "image_saved": null
+    },
+    {
+        "timestamp": "2025-05-15T12:55:08.560185Z",
+        "person_cmsId": "Unknown",
+        "person_name": "Unknown",
+        "action": "OUT",
+        "camera_source": "ipcam",
+        "image_saved": null
+    },
+    {
+        "timestamp": "2025-05-15T13:17:32.118618Z",
+        "person_cmsId": "Unknown",
+        "person_name": "Unknown",
+        "action": "IN",
+        "camera_source": "ipcam",
+        "image_saved": null
+    },
+    {
+        "timestamp": "2025-05-15T13:17:36.517085Z",
+        "person_cmsId": "Unknown",
+        "person_name": "Unknown",
+        "action": "OUT",
+        "camera_source": "ipcam",
+        "image_saved": null
+    },
+    {
+        "timestamp": "2025-05-15T13:17:42.485144Z",
+        "person_cmsId": "Unknown",
+        "person_name": "Unknown",
+        "action": "OUT",
+        "camera_source": "ipcam",
+        "image_saved": null
+    },
+    {
+        "timestamp": "2025-05-15T13:17:45.013313Z",
+        "person_cmsId": "Unknown",
+        "person_name": "Unknown",
+        "action": "IN",
+        "camera_source": "ipcam",
+        "image_saved": null
+    },
+    {
+        "timestamp": "2025-05-15T13:17:48.007366Z",
+        "person_cmsId": "Unknown",
+        "person_name": "Unknown",
+        "action": "OUT",
+        "camera_source": "ipcam",
+        "image_saved": null
+    },
+    {
+        "timestamp": "2025-05-15T13:17:50.309625Z",
+        "person_cmsId": "Unknown",
+        "person_name": "Unknown",
+        "action": "IN",
+        "camera_source": "ipcam",
+        "image_saved": null
+    },
+    {
+        "timestamp": "2025-05-15T13:17:53.022296Z",
+        "person_cmsId": "Unknown",
+        "person_name": "Unknown",
+        "action": "OUT",
+        "camera_source": "ipcam",
+        "image_saved": null
+    }
+]
