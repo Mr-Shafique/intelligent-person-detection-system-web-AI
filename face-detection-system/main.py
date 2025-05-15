@@ -21,7 +21,7 @@ def create_face_embedding(face):
     """
     try:
         # Generate embedding using DeepFace
-        embedding = DeepFace.represent(face, model_name="SFace", enforce_detection=False, detector_backend='skip')
+        embedding = DeepFace.represent(face, model_name="Facenet", enforce_detection=False, detector_backend='skip')
         return embedding[0]["embedding"]  # Return the embedding vector
     except Exception as e:
         print(f"Error generating embedding: {e}")
