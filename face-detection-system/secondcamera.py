@@ -15,8 +15,8 @@ YOLO_MODEL_PATH = 'yolov8n-face.pt'
 EMBEDDINGS_FILE = 'face_embeddings.pkl'
 OUTPUT_DIR = 'capturedfaces'
 DETECTION_LOG_FILE = "detectionlog.json"
-RECOGNITION_THRESHOLD = 0.4 # Cosine distance; lower is more similar. Adjust as needed. Max is around 0.6 for SFace being a decent match.
-PROCESS_EVERY_N_FRAMES =3 # Process every Nth frame for detection & recognition
+RECOGNITION_THRESHOLD = 0.6 # Cosine distance; lower is more similar. Adjust as needed. Max is around 0.6 for SFace being a decent match.
+PROCESS_EVERY_N_FRAMES =2 # Process every Nth frame for detection & recognition
 FACE_CLASS_ID = 0 # Assuming class 0 is 'face' for yolov8n-face.pt
 
 # --- Person Counting Variables (Webcam & IP Camera) ---
@@ -167,7 +167,7 @@ def log_detection_event(person_cmsId, person_name, action, camera_source, recogn
 
 # --- Camera Initialization ---
 webcam = cv2.VideoCapture(0)
-ip_camera_url = "http://10.102.139.146:8080/video" # Replace with your IP camera URL
+ip_camera_url = "http://10.102.139" # Replace with your IP camera URL
 ip_camera = cv2.VideoCapture(ip_camera_url)
 
 webcam_available = webcam.isOpened()

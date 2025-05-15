@@ -1,106 +1,34 @@
 [
     {
-        "timestamp": "2025-05-15T12:54:45.243692Z",
-        "person_cmsId": "Unknown",
-        "person_name": "Unknown",
+        "timestamp": "2025-05-15T18:30:16.574713Z",
+        "person_cmsId": "023-20-0179",
+        "person_name": "shafique",
+        "action": "OUT",
+        "camera_source": "webcam",
+        "image_saved": "capturedfaces\\recognized_023-20-0179_OUT_1747333816573.jpg"
+    },
+    {
+        "timestamp": "2025-05-15T18:30:21.768777Z",
+        "person_cmsId": "023-20-0179",
+        "person_name": "shafique",
         "action": "IN",
-        "camera_source": "ipcam",
-        "image_saved": null
+        "camera_source": "webcam",
+        "image_saved": "capturedfaces\\recognized_023-20-0179_IN_1747333821766.jpg"
     },
     {
-        "timestamp": "2025-05-15T12:54:48.746215Z",
-        "person_cmsId": "Unknown",
-        "person_name": "Unknown",
+        "timestamp": "2025-05-15T18:30:27.288738Z",
+        "person_cmsId": "023-20-0179",
+        "person_name": "shafique",
         "action": "OUT",
-        "camera_source": "ipcam",
-        "image_saved": null
+        "camera_source": "webcam",
+        "image_saved": "capturedfaces\\recognized_023-20-0179_OUT_1747333827286.jpg"
     },
     {
-        "timestamp": "2025-05-15T12:55:08.560185Z",
-        "person_cmsId": "Unknown",
-        "person_name": "Unknown",
-        "action": "OUT",
-        "camera_source": "ipcam",
-        "image_saved": null
-    },
-    {
-        "timestamp": "2025-05-15T13:17:32.118618Z",
-        "person_cmsId": "Unknown",
-        "person_name": "Unknown",
+        "timestamp": "2025-05-15T18:30:31.568701Z",
+        "person_cmsId": "023-20-0179",
+        "person_name": "shafique",
         "action": "IN",
-        "camera_source": "ipcam",
-        "image_saved": null
-    },
-    {
-        "timestamp": "2025-05-15T13:17:36.517085Z",
-        "person_cmsId": "Unknown",
-        "person_name": "Unknown",
-        "action": "OUT",
-        "camera_source": "ipcam",
-        "image_saved": null
-    },
-    {
-        "timestamp": "2025-05-15T13:17:42.485144Z",
-        "person_cmsId": "Unknown",
-        "person_name": "Unknown",
-        "action": "OUT",
-        "camera_source": "ipcam",
-        "image_saved": null
-    },
-    {
-        "timestamp": "2025-05-15T13:17:45.013313Z",
-        "person_cmsId": "Unknown",
-        "person_name": "Unknown",
-        "action": "IN",
-        "camera_source": "ipcam",
-        "image_saved": null
-    },
-    {
-        "timestamp": "2025-05-15T13:17:48.007366Z",
-        "person_cmsId": "Unknown",
-        "person_name": "Unknown",
-        "action": "OUT",
-        "camera_source": "ipcam",
-        "image_saved": null
-    },
-    {
-        "timestamp": "2025-05-15T13:17:50.309625Z",
-        "person_cmsId": "Unknown",
-        "person_name": "Unknown",
-        "action": "IN",
-        "camera_source": "ipcam",
-        "image_saved": null
-    },
-    {
-        "timestamp": "2025-05-15T13:17:53.022296Z",
-        "person_cmsId": "Unknown",
-        "person_name": "Unknown",
-        "action": "OUT",
-        "camera_source": "ipcam",
-        "image_saved": null
-    },
-    {
-        "timestamp": "2025-05-15T13:29:08.369755Z",
-        "person_cmsId": "Unknown",
-        "person_name": "Unknown",
-        "action": "OUT",
-        "camera_source": "ipcam",
-        "image_saved": null
-    },
-    {
-        "timestamp": "2025-05-15T13:29:11.169710Z",
-        "person_cmsId": "Unknown",
-        "person_name": "Unknown",
-        "action": "IN",
-        "camera_source": "ipcam",
-        "image_saved": null
-    },
-    {
-        "timestamp": "2025-05-15T13:29:13.876654Z",
-        "person_cmsId": "Unknown",
-        "person_name": "Unknown",
-        "action": "OUT",
-        "camera_source": "ipcam",
-        "image_saved": null
+        "camera_source": "webcam",
+        "image_saved": "capturedfaces\\recognized_023-20-0179_IN_1747333831565.jpg"
     }
 ]
