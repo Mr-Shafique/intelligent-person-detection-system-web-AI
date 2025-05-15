@@ -1,5 +1,5 @@
 import pickle
-import json
+# import json
 
 def print_face_embeddings(file_path):
     try:
@@ -18,5 +18,5 @@ def print_face_embeddings(file_path):
         print(f"Error reading the pickle file: {e}")
 
 if __name__ == "__main__":
-    file_path = "face_embeddings.pkl"
+    file_path = "D:\\intelegent-------system\\face-detection-system\\face_embeddings.pkl"
     print_face_embeddings(file_path)
