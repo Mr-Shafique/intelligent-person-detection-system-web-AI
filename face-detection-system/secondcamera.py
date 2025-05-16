@@ -129,34 +129,41 @@ def find_match(live_face_roi, known_embeddings_data, threshold):
 
 # --- Helper Function for Logging ---
 def log_detection_event(person_cmsId, person_name, action, camera_source, recognized_face_frame_filename=None):
-    log_entry = {
+    event = {
         "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
-        "person_cmsId": str(person_cmsId) if person_cmsId else "Unknown",
-        "person_name": str(person_name) if person_name else "Unknown",
         "action": action,
         "camera_source": camera_source,
         "image_saved": recognized_face_frame_filename
     }
-    
     log_data = []
     if os.path.exists(DETECTION_LOG_FILE):
         try:
             with open(DETECTION_LOG_FILE, "r") as f:
                 content = f.read()
-                if content.strip(): # Check if file is not empty
+                if content.strip():
                     log_data = json.loads(content)
-                if not isinstance(log_data, list): # Ensure it's a list
+                if not isinstance(log_data, list):
                     print(f"Warning: {DETECTION_LOG_FILE} does not contain a list. Reinitializing.")
                     log_data = []
-        except json.JSONDecodeError:
-            print(f"Warning: {DETECTION_LOG_FILE} is corrupted. Reinitializing.")
-            log_data = []
         except Exception as e:
             print(f"Error reading {DETECTION_LOG_FILE}: {e}. Reinitializing.")
             log_data = []
-            
-    log_data.append(log_entry)
-    
+    # Find person by cmsId
+    found = False
+    for person in log_data:
+        if person.get("person_cmsId") == str(person_cmsId):
+            person["person_name"] = str(person_name) if person_name else "Unknown"
+            if "events" not in person or not isinstance(person["events"], list):
+                person["events"] = []
+            person["events"].append(event)
+            found = True
+            break
+    if not found:
+        log_data.append({
+            "person_cmsId": str(person_cmsId) if person_cmsId else "Unknown",
+            "person_name": str(person_name) if person_name else "Unknown",
+            "events": [event]
+        })
     try:
         with open(DETECTION_LOG_FILE, "w") as f:
             json.dump(log_data, f, indent=4)
