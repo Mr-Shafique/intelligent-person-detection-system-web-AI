@@ -16,6 +16,8 @@ const PersonManagement = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [selectedPerson, setSelectedPerson] = useState(null);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   // Keep basic form data separate
   const [formData, setFormData] = useState({
     name: '',
@@ -210,16 +212,31 @@ const PersonManagement = () => {
     }
   };
 
-  const handleDelete = async (id) => {
-    if (window.confirm('Are you sure you want to delete this person?')) {
-      try {
-        await api.deletePerson(id);
-        toast.success('Person deleted successfully');
-        fetchPersons();
-      } catch (error) {
-        toast.error('Error deleting person: ' + error.message);
-      }
+
+
+  const [personToDeleteId, setPersonToDeleteId] = useState(null);
+
+  const handleDelete = (id) => {
+    setPersonToDeleteId(id);
+    setIsDeleteModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    try {
+      await api.deletePerson(personToDeleteId);
+      toast.success('Person deleted successfully');
+      fetchPersons();
+    } catch (error) {
+      toast.error('Error deleting person: ' + error.message);
+    } finally {
+      setIsDeleteModalOpen(false);
+      setPersonToDeleteId(null); // Reset after deletion
     }
+  };
+
+  const cancelDelete = () => {
+    setIsDeleteModalOpen(false);
+    setPersonToDeleteId(null); // Reset if deletion is cancelled
   };
 
   const openModal = (person = null) => {
@@ -511,6 +528,16 @@ const PersonManagement = () => {
             </Button>
           </div>
         </form>
+      </Modal>
+      {/* Delete Confirmation Modal */}
+      <Modal isOpen={isDeleteModalOpen} onClose={cancelDelete} title="Confirm Delete">
+        <div className="py-4 text-center">
+          <p className="text-lg mb-6">Are you sure you want to delete this person?</p>
+          <div className="flex justify-center gap-6">
+            <Button type="button" onClick={cancelDelete} className="bg-gray-500 hover:bg-gray-600">Cancel</Button>
+            <Button type="button" onClick={confirmDelete} className="bg-red-600 hover:bg-red-700">Delete</Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

@@ -11,6 +11,8 @@ const DetectionLogs = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [selectedImageUrl, setSelectedImageUrl] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [dateFilter, setDateFilter] = useState('');
 
   useEffect(() => {
     fetchLogs();
@@ -39,9 +41,49 @@ const DetectionLogs = () => {
     setSelectedImageUrl('');
   };
 
+  // Filter logs by search term and date
+  const filteredLogs = logs.filter((log) => {
+    const nameMatch = log?.person_name?.toLowerCase().includes(searchTerm.toLowerCase());
+    const cmsIdMatch = log?.person_cmsId?.toLowerCase().includes(searchTerm.toLowerCase());
+    // Check if any event matches the date filter
+    let dateMatch = true;
+    if (dateFilter) {
+      dateMatch = log.events && log.events.some(event => {
+        if (!event.timestamp) return false;
+        const eventDate = new Date(event.timestamp).toISOString().slice(0, 10);
+        return eventDate === dateFilter;
+      });
+    }
+    return (nameMatch || cmsIdMatch) && dateMatch;
+  });
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-bold">Detection Logs</h1>
+
+      {/* Search and filter bar */}
+      <div className="flex flex-col md:flex-row md:items-center gap-4 mb-4">
+        <div className="flex-1">
+          <input
+            type="text"
+            placeholder="Search by Name or CMS ID..."
+            className="border border-gray-300 rounded px-4 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-400"
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+          />
+        </div>
+        <div className="w-full md:w-1/4">
+          <input
+            type="date"
+            className="border border-gray-300 rounded px-4 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-400 cursor-pointer"
+            value={dateFilter}
+            onChange={e => setDateFilter(e.target.value)}
+            onFocus={e => e.target.showPicker && e.target.showPicker()}
+            onClick={e => e.target.showPicker && e.target.showPicker()}
+            style={{ minWidth: 0 }} // ensures it doesn't overflow its container
+          />
+        </div>
+      </div>
 
       <Card className="p-4">
         <div className="overflow-x-auto">
@@ -75,14 +117,14 @@ const DetectionLogs = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {logs.length === 0 ? (
+                {filteredLogs.length === 0 ? (
                   <tr>
                     <td colSpan="7" className="px-6 py-4 text-center text-gray-500">
                       No detection logs found.
                     </td>
                   </tr>
                 ) : (
-                  logs.map((log) => {
+                  filteredLogs.map((log) => {
                     const latestEvent = log?.events && log.events.length > 0 
                                       ? log.events[log.events.length - 1] 
                                       : null;
@@ -149,38 +191,40 @@ const DetectionLogs = () => {
 
       {selectedLog && (
         <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} title={`Events for ${selectedLog.person_name}`}>
-          <div className="mt-4">
-            <h3 className="text-lg font-semibold mb-2">Person: {selectedLog.person_name} (CMS ID: {selectedLog.person_cmsId})</h3>
+          <div className="mt-4 w-full max-w-6xl mx-auto">
+            <h3 className="text-2xl font-semibold mb-4 text-center">
+              Person: {selectedLog.person_name} (CMS ID: {selectedLog.person_cmsId})
+            </h3>
             {selectedLog.events && selectedLog.events.length > 0 ? (
               <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
+                <table className="min-w-full divide-y divide-gray-200 text-base">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Image</th>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Location</th>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Action (In/Out)</th>
-                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Timestamp</th>
+                      <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Image</th>
+                      <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Location</th>
+                      <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Action (In/Out)</th>
+                      <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Timestamp</th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {selectedLog.events.slice().reverse().map((event, index) => ( // Show latest first
+                    {selectedLog.events.slice().reverse().map((event, index) => (
                       <tr key={index}>
-                        <td className="px-4 py-2 whitespace-nowrap">
+                        <td className="px-6 py-3 whitespace-nowrap">
                           {event.image_saved ? (
                             <img
                               src={`http://localhost:5000/${event.image_saved.replace(/\\\\/g, '/')}`}
                               alt="Event snapshot"
-                              className="h-12 w-12 object-cover border border-gray-200 rounded cursor-pointer"
-                              onError={(e) => { e.target.src = 'https://via.placeholder.com/50'; }}
+                              className="h-24 w-24 object-cover border border-gray-200 rounded cursor-pointer transition-transform duration-200 hover:scale-110"
+                              onError={(e) => { e.target.src = 'https://via.placeholder.com/80'; }}
                               onClick={() => handleImageClick(`http://localhost:5000/${event.image_saved.replace(/\\\\/g, '/')}`)}
                             />
                           ) : (
-                            <div className="h-12 w-12 flex items-center justify-center bg-gray-100 text-gray-400 rounded">No Img</div>
+                            <div className="h-24 w-24 flex items-center justify-center bg-gray-100 text-gray-400 rounded">No Img</div>
                           )}
                         </td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-500">{event.camera_source || 'N/A'}</td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-500">{event.action || 'N/A'}</td>
-                        <td className="px-4 py-2 whitespace-nowrap text-sm text-gray-500">
+                        <td className="px-6 py-3 whitespace-nowrap text-base text-gray-700">{event.camera_source || 'N/A'}</td>
+                        <td className="px-6 py-3 whitespace-nowrap text-base text-gray-700">{event.action || 'N/A'}</td>
+                        <td className="px-6 py-3 whitespace-nowrap text-base text-gray-700">
                           {event.timestamp ? new Date(event.timestamp).toLocaleString() : 'N/A'}
                         </td>
                       </tr>
@@ -197,7 +241,7 @@ const DetectionLogs = () => {
 
       {isImageModalOpen && (
         <Modal isOpen={isImageModalOpen} onClose={closeImageModal} title="Image Preview">
-          <div className="mt-4 flex justify-center items-center">
+          <div className=" flex justify-center items-center">
             <img 
               src={selectedImageUrl} 
               alt="Selected detection" 
