@@ -173,7 +173,7 @@ def log_detection_event(person_cmsId, person_name, action, camera_source_input, 
 
 # --- Camera Initialization ---
 webcam = cv2.VideoCapture(0)
-ip_camera_url = "http://10.102.139" # Replace with your IP camera URL
+ip_camera_url = "http://10.102.138.93:8080/video" # Replace with your IP camera URL
 ip_camera = cv2.VideoCapture(ip_camera_url)
 
 webcam_available = webcam.isOpened()
