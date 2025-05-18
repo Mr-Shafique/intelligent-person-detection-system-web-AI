@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import Loader from '../components/Loader';
 import { toast } from 'react-toastify';
 import Card from '../components/Card';
 import { api } from '../utils/api';
@@ -88,7 +89,7 @@ const DetectionLogs = () => {
       <Card className="p-4">
         <div className="overflow-x-auto">
           {loading ? (
-            <p>Loading logs...</p>
+            <Loader />
           ) : (
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">

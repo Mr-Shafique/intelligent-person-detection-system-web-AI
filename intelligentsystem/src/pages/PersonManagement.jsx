@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import Loader from '../components/Loader';
 import { toast } from 'react-toastify';
 import Card from '../components/Card';
 import Button from '../components/Button';
@@ -12,6 +13,7 @@ const BASE_URL = 'http://localhost:5000';
 
 const PersonManagement = () => {
   const [persons, setPersons] = useState([]);
+  const [loading, setLoading] = useState(false);
   const [filteredPersons, setFilteredPersons] = useState([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -59,12 +61,15 @@ const PersonManagement = () => {
   };
 
   const fetchPersons = async () => {
+    setLoading(true);
     try {
       const response = await api.getPersons();
       setPersons(response.data);
       setFilteredPersons(response.data); // Initialize filteredPersons
     } catch (error) {
       toast.error('Error fetching persons: ' + error.message);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -272,120 +277,128 @@ const PersonManagement = () => {
 
   return (
     <div className="space-y-6">
-      <div className="flex  gap-4 justify-around  flex-column  py-4">
-      {/* Search Row */}
-        <div className="relative flex flex-1">
-          <div className="absolute inset-y-0 pl-2 left-0 flex items-center  pointer-events-none">
-            <svg className="w-4 h-4 text-gray-500" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 20">
-              <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m19 19-4-4m0-7A7 7 0 1 1 1 8a7 7 0 0 1 14 0Z"/>
-            </svg>
+      {loading ? (
+        <div className="flex justify-center items-center min-h-[300px]">
+          <Loader />
+        </div>
+      ) : (
+        <>
+          <div className="flex  gap-4 justify-around  flex-column  py-4">
+            {/* Search Row */}
+            <div className="relative flex flex-1">
+              <div className="absolute inset-y-0 pl-2 left-0 flex items-center  pointer-events-none">
+                <svg className="w-4 h-4 text-gray-500" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 20 20">
+                  <path stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="m19 19-4-4m0-7A7 7 0 1 1 1 8a7 7 0 0 1 14 0Z"/>
+                </svg>
+              </div>
+              <input
+                type="search"
+                className="block w-full p-3 pl-10 text-sm text-gray-900 border border-gray-300 rounded-lg bg-gray-50 focus:ring-blue-500 focus:border-blue-500"
+                placeholder="Search by name or CMS ID..."
+                value={searchTerm}
+                onChange={handleSearchChange}
+              />
+            </div>
+            {searchTerm && (
+              <p className="mt-2 text-sm text-gray-500">
+                Found {filteredPersons.length} {filteredPersons.length === 1 ? 'result' : 'results'} for "{searchTerm}"
+              </p>
+            )}
+            <div className='flex flex-2'>
+              <Button onClick={() => openModal()}>Add New Person</Button>
+            </div>
           </div>
-          <input
-            type="search"
-            className="block w-full p-3 pl-10 text-sm text-gray-900 border border-gray-300 rounded-lg bg-gray-50 focus:ring-blue-500 focus:border-blue-500"
-            placeholder="Search by name or CMS ID..."
-            value={searchTerm}
-            onChange={handleSearchChange}
-            />
-        </div>
-        {searchTerm && (
-          <p className="mt-2 text-sm text-gray-500">
-            Found {filteredPersons.length} {filteredPersons.length === 1 ? 'result' : 'results'} for "{searchTerm}"
-          </p>
-        )}
-        <div className='flex flex-2'>
-        <Button onClick={() => openModal()}>Add New Person</Button>
-        </div>
-        </div>
 
-      <Card className="p-4">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Image
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Name
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  CMS ID
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Status
-                </th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Actions
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {filteredPersons.map((person) => (
-                <tr key={person._id}>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    {person.frontImage ? (
-                      <img
-                        src={`${BASE_URL}${person.frontImage}`}
-                        alt={`${person.name} (Front)`}
-                        className="h-16 w-16 rounded-full object-cover border-2 border-gray-200"
-                        onError={(e) => {
-                          console.error("Image load error:", e.target.src);
-                          e.target.onerror = null; // Prevent infinite error loop
-                          e.target.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2'%3E%3C/path%3E%3Ccircle cx='12' cy='7' r='4'%3E%3C/circle%3E%3C/svg%3E";
-                        }}
-                      />
-                    ) : (
-                      <div className="h-16 w-16 rounded-full flex items-center justify-center bg-gray-100 border-2 border-gray-200 text-gray-500 text-xs">
-                         <img 
-                  src="https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_1280.png" 
-                  alt="person"
-                  className=" rounded-full object-center" 
-                   />
-                      </div>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm font-medium text-gray-900">
-                      {person.name}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="text-sm text-gray-500">
-                      {person.cmsId}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span
-                      className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        person.status === 'allowed'
-                          ? 'bg-green-100 text-green-800'
-                          : 'bg-red-100 text-red-800'
-                      }`}
-                    >
-                      {person.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                    <button
-                      onClick={() => openModal(person)}
-                      className="text-indigo-600 hover:text-indigo-900 mr-4"
-                    >
-                      Edit
-                    </button>
-                    <button
-                      onClick={() => handleDelete(person._id)}
-                      className="text-red-600 hover:text-red-900"
-                    >
-                      Delete
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
+          <Card className="p-4">
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Image
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Name
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      CMS ID
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Status
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {filteredPersons.map((person) => (
+                    <tr key={person._id}>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        {person.frontImage ? (
+                          <img
+                            src={`${BASE_URL}${person.frontImage}`}
+                            alt={`${person.name} (Front)`}
+                            className="h-16 w-16 rounded-full object-cover border-2 border-gray-200"
+                            onError={(e) => {
+                              console.error("Image load error:", e.target.src);
+                              e.target.onerror = null; // Prevent infinite error loop
+                              e.target.src = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2'%3E%3C/path%3E%3Ccircle cx='12' cy='7' r='4'%3E%3C/circle%3E%3C/svg%3E";
+                            }}
+                          />
+                        ) : (
+                          <div className="h-16 w-16 rounded-full flex items-center justify-center bg-gray-100 border-2 border-gray-200 text-gray-500 text-xs">
+                            <img 
+                              src="https://cdn.pixabay.com/photo/2015/10/05/22/37/blank-profile-picture-973460_1280.png" 
+                              alt="person"
+                              className=" rounded-full object-center" 
+                            />
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm font-medium text-gray-900">
+                          {person.name}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="text-sm text-gray-500">
+                          {person.cmsId}
+                        </div>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span
+                          className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                            person.status === 'allowed'
+                              ? 'bg-green-100 text-green-800'
+                              : 'bg-red-100 text-red-800'
+                          }`}
+                        >
+                          {person.status}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                        <button
+                          onClick={() => openModal(person)}
+                          className="text-indigo-600 hover:text-indigo-900 mr-4"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          onClick={() => handleDelete(person._id)}
+                          className="text-red-600 hover:text-red-900"
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </>
+      )}
 
       <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)}>
         <form onSubmit={handleSubmit} className="space-y-4">

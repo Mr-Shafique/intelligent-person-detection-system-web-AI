@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import Card from '../components/Card';
 import { api } from '../utils/api';
 import Modal from '../components/Modal'; // Import Modal
+import Loader from '../components/Loader';
 
 const Dashboard = () => {
   const [stats, setStats] = useState({
@@ -174,6 +175,7 @@ const Dashboard = () => {
           </div>
         </Modal>
       )}
+
     </div>
   );
 };
