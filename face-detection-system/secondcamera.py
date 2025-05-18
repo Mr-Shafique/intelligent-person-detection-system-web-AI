@@ -6,6 +6,7 @@ import numpy as np
 import math
 import pickle
 import json
+import requests
 import datetime
 from deepface import DeepFace
 from scipy.spatial.distance import cosine # For comparing embeddings
@@ -80,96 +81,85 @@ def create_face_embedding_live(face_roi):
 def find_match(live_face_roi, known_embeddings_data, threshold):
     live_embedding = create_face_embedding_live(live_face_roi)
     if not live_embedding:
-        return "Unknown", None, None, float('inf')
-
-    best_match_name = "Unknown"
-    best_match_cmsId = None
-    best_match_status = None
-    min_distance = float('inf')
+        return "Unknown", None, None, float('inf') # Ensure 4-tuple return
 
     if not known_embeddings_data: # No known embeddings to compare against
-        return best_match_name, best_match_cmsId, best_match_status, min_distance
+        return "Unknown", None, None, float('inf') # Ensure 4-tuple return
 
     v1 = np.array(live_embedding)
     if v1.ndim > 1: v1 = v1.flatten()
 
+    # Variables to store the details of the closest face found
+    closest_distance = float('inf')
+    matched_name = "Unknown"
+    matched_cmsId = None
+    # This will store the status from the PKL file for the closest face.
+    # If 'status' key is missing for that specific entry, it will be None.
+    matched_status_from_pkl = None 
+
     for known_entry in known_embeddings_data:
         known_embedding_vector = known_entry.get("imageEmbedding")
         if not known_embedding_vector:
+            # print(f"Warning: Skipping known_entry due to missing 'imageEmbedding': {known_entry.get('name')}")
             continue
 
         v2 = np.array(known_embedding_vector)
         if v2.ndim > 1: v2 = v2.flatten()
 
         if v1.shape != v2.shape:
-            # print(f"Warning: Embedding shape mismatch. Live: {v1.shape}, Known: {v2.shape}. Skipping this comparison.")
+            # print(f"Warning: Skipping embedding due to shape mismatch for {known_entry.get('name')}. Live: {v1.shape}, Known: {v2.shape}")
             continue
-            
+        
         try:
             distance = cosine(v1, v2)
         except Exception as e:
-            print(f"Error calculating cosine distance: {e}")
-            continue # Skip this comparison
+            # print(f"Error calculating cosine distance for {known_entry.get('name')}: {e}")
+            continue # Skip this entry
 
-        if distance < min_distance:
-            min_distance = distance
-            if distance < threshold:
-                best_match_name = known_entry.get("name", "ErrorName")
-                best_match_cmsId = known_entry.get("cmsId", "ErrorID")
-                best_match_status = known_entry.get("status", "ErrorStatus")
-            else: # Closest, but not close enough to be a confident match
-                best_match_name = "Unknown"
-                best_match_cmsId = None
-                best_match_status = None
-    
-    if best_match_cmsId is None and min_distance <= threshold + 0.1 : # If very close but just missed
-        pass # print(f"Closest miss distance: {min_distance} for an Unknown face")
-        
-    return best_match_name, best_match_cmsId, best_match_status, min_distance
+        if distance < closest_distance:
+            closest_distance = distance
+            # This is the new closest face found so far. Store its details.
+            matched_name = known_entry.get("name", "Error: Name Missing")
+            matched_cmsId = known_entry.get("cmsId", "Error: CMS ID Missing")
+            # Get the status directly from the pkl entry.
+            # If 'status' key is missing in pkl for this entry, matched_status_from_pkl will be None.
+            matched_status_from_pkl = known_entry.get("status") 
+                                                
+    # After checking all known entries, if the closest one meets the threshold, it's a confident match.
+    if closest_distance <= threshold:
+        # Return the details of the confident match.
+        # matched_status_from_pkl will be the actual status string (e.g., "banned") or None.
+        # log_detection_event will handle a None status by converting it to "Unknown".
+        return matched_name, matched_cmsId, matched_status_from_pkl, closest_distance
+    else:
+        # No confident match found, return "Unknown" and None for status.
+        return "Unknown", None, None, closest_distance
 
-# --- Helper Function for Logging ---
-def log_detection_event(person_cmsId, person_name, action, camera_source, recognized_face_frame_filename=None):
+
+# --- Helper Function for Logging to Backend ---
+BACKEND_API_URL = "http://localhost:5000/api/detections"
+def log_detection_event(person_cmsId, person_name, action, camera_source, recognized_face_frame_filename=None, status=None):
     event = {
         "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
         "action": action,
         "camera_source": camera_source,
-        "image_saved": recognized_face_frame_filename
+        "image_saved": recognized_face_frame_filename,
+        "person_status_at_event": str(status) if status else "Unknown"
     }
-    log_data = []
-    if os.path.exists(DETECTION_LOG_FILE):
-        try:
-            with open(DETECTION_LOG_FILE, "r") as f:
-                content = f.read()
-                if content.strip():
-                    log_data = json.loads(content)
-                if not isinstance(log_data, list):
-                    print(f"Warning: {DETECTION_LOG_FILE} does not contain a list. Reinitializing.")
-                    log_data = []
-        except Exception as e:
-            print(f"Error reading {DETECTION_LOG_FILE}: {e}. Reinitializing.")
-            log_data = []
-    # Find person by cmsId
-    found = False
-    for person in log_data:
-        if person.get("person_cmsId") == str(person_cmsId):
-            person["person_name"] = str(person_name) if person_name else "Unknown"
-            if "events" not in person or not isinstance(person["events"], list):
-                person["events"] = []
-            person["events"].append(event)
-            found = True
-            break
-    if not found:
-        log_data.append({
-            "person_cmsId": str(person_cmsId) if person_cmsId else "Unknown",
-            "person_name": str(person_name) if person_name else "Unknown",
-            "events": [event]
-        })
+    payload = {
+        "person_cmsId": str(person_cmsId) if person_cmsId else "Unknown",
+        "person_name": str(person_name) if person_name else "Unknown",
+        "status": str(status) if status else "Unknown"  # Always include status, default to "Unknown"
+    }
+
+    payload["event"] = event # Add event object last
+    
     try:
-        with open(DETECTION_LOG_FILE, "w") as f:
-            json.dump(log_data, f, indent=4)
-        print(f"Logged: {person_name} ({person_cmsId}) - {action} from {camera_source}")
+        response = requests.post(BACKEND_API_URL, json=payload, timeout=2)
+        response.raise_for_status()
+        print(f"Logged to backend: {person_name} ({person_cmsId}) - {action} from {camera_source}")
     except Exception as e:
-        print(f"Error writing to {DETECTION_LOG_FILE}: {e}")
+        print(f"Error sending detection log to backend: {e}")
 
 
 # --- Camera Initialization ---
@@ -301,17 +291,23 @@ while True:
                         if action_taken:
                             print(f"ID {face_id} ({track_data.get('name', 'Unknown')}) COUNTED {action_taken}. Total IN: {PERSONS_IN_COUNT}, Total OUT: {PERSONS_OUT_COUNT}")
                             img_filename_event = None
-                            if track_data['cmsId']: # Save image only for recognized person
-                                timestamp_img = int(time.time() * 1000)
-                                img_filename_event = os.path.join(OUTPUT_DIR, f"recognized_{track_data['cmsId']}_{action_taken}_{timestamp_img}.jpg")
-                                try:
-                                    cv2.imwrite(img_filename_event, frame_webcam_original) # Save original high-res frame
-                                    print(f"Saved webcam frame for {action_taken}: {img_filename_event}")
-                                except Exception as e:
-                                    print(f"Error saving frame {img_filename_event}: {e}")
-                                    img_filename_event = None # Ensure it's None if save failed
+                            timestamp_img = int(time.time() * 1000)
                             
-                            log_detection_event(track_data['cmsId'], track_data['name'], action_taken, "webcam", img_filename_event)
+                            # Determine filename based on whether person is recognized or unknown
+                            if track_data.get('cmsId'):
+                                img_filename_event = os.path.join(OUTPUT_DIR, f"recognized_{track_data['cmsId']}_{action_taken}_{timestamp_img}.jpg")
+                            else: # Person is Unknown
+                                img_filename_event = os.path.join(OUTPUT_DIR, f"unknown_webcam_{action_taken}_{timestamp_img}.jpg")
+                            
+                            # Attempt to save the image
+                            try:
+                                cv2.imwrite(img_filename_event, frame_webcam_original) 
+                                print(f"Saved webcam frame for {action_taken}: {img_filename_event}")
+                            except Exception as e:
+                                print(f"Error saving webcam frame {img_filename_event}: {e}")
+                                img_filename_event = None # Ensure it's None if save failed
+                            
+                            log_detection_event(track_data.get('cmsId'), track_data.get('name'), action_taken, "webcam", img_filename_event, track_data.get('status'))
                     else: # Track not matched
                         if (webcam_frame_count - track_data['last_seen_frame']) > MAX_FRAMES_UNSEEN:
                             # print(f"Removing lost track ID {face_id} ({track_data.get('name', 'Unknown')})")
@@ -428,6 +424,7 @@ while True:
                         action_taken = "OUT"
                         tracked_faces_ip[face_id]['crossed_B_pending_A'] = False
                         tracked_faces_ip[face_id]['crossed_A_pending_B'] = False
+                    # Reset pending states if person turns back
                     if track_data['crossed_A_pending_B'] and curr_cy < LINE_A_Y:
                         tracked_faces_ip[face_id]['crossed_A_pending_B'] = False
                     if track_data['crossed_B_pending_A'] and curr_cy >= LINE_B_Y:
@@ -435,17 +432,24 @@ while True:
                     if action_taken:
                         print(f"[IPCAM] ID {face_id} ({track_data.get('name', 'Unknown')}) COUNTED {action_taken}. Total IN: {IP_PERSONS_IN_COUNT}, Total OUT: {IP_PERSONS_OUT_COUNT}")
                         img_filename_event = None
+                        timestamp_img = int(time.time() * 1000)
+
+                        # Determine filename based on whether person is recognized or unknown
                         if track_data.get('cmsId'):
-                            timestamp_img = int(time.time() * 1000)
                             img_filename_event = os.path.join(OUTPUT_DIR, f"ipcam_recognized_{track_data['cmsId']}_{action_taken}_{timestamp_img}.jpg")
-                            try:
-                                cv2.imwrite(img_filename_event, frame_ip_original)
-                                print(f"Saved IP cam frame for {action_taken}: {img_filename_event}")
-                            except Exception as e:
-                                print(f"Error saving IP cam frame {img_filename_event}: {e}")
-                                img_filename_event = None
-                        log_detection_event(track_data.get('cmsId'), track_data.get('name'), action_taken, "ipcam", img_filename_event)
-                else:
+                        else: # Person is Unknown
+                            img_filename_event = os.path.join(OUTPUT_DIR, f"ipcam_unknown_{action_taken}_{timestamp_img}.jpg")
+                        
+                        # Attempt to save the image (using frame_ip_original for better quality)
+                        try:
+                            cv2.imwrite(img_filename_event, frame_ip_original) 
+                            print(f"Saved IP cam frame for {action_taken}: {img_filename_event}")
+                        except Exception as e:
+                            print(f"Error saving IP cam frame {img_filename_event}: {e}")
+                            img_filename_event = None # Ensure it's None if save failed
+                            
+                        log_detection_event(track_data.get('cmsId'), track_data.get('name'), action_taken, "ipcam", img_filename_event, track_data.get('status'))
+                else: # Track not matched
                     if (ipcam_frame_count - track_data['last_seen_frame']) > MAX_FRAMES_UNSEEN:
                         del tracked_faces_ip[face_id]
             for new_det_data in temp_current_detections_ip:

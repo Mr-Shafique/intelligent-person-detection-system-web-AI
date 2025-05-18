@@ -3,12 +3,10 @@ const router = express.Router();
 const DetectionLog = require('../models/DetectionLog');
 const Person = require('../models/Person'); // Needed to check person status
 
-// GET all detection logs, populated with person details
+// GET all detection logs, grouped by person (like detectionlog.json)
 router.get('/', async (req, res) => {
   try {
-    const logs = await DetectionLog.find()
-      .sort({ timestamp: -1 }) // Show newest first
-      .populate('person', 'name cmsId'); // Populate name and cmsId from the referenced Person
+    const logs = await DetectionLog.find().sort({ 'person_cmsId': 1, 'events.timestamp': -1 });
     res.json(logs);
   } catch (error) {
     console.error('Error fetching detection logs:', error);
@@ -16,39 +14,52 @@ router.get('/', async (req, res) => {
   }
 });
 
-// POST a new detection log (simulated endpoint for camera system)
-// In a real system, this endpoint would receive data from the camera/detection software
+// POST a new detection event (append to person or create new person log)
 router.post('/', async (req, res) => {
   try {
-    const { personId, location, capturedImage } = req.body;
+    const { person_cmsId, person_name, event, status } = req.body; // Add status to destructuring
 
-    // Validate input
-    if (!personId || !location || !capturedImage) {
-      return res.status(400).json({ message: 'Missing required fields: personId, location, capturedImage' });
+    if (!person_cmsId || !person_name || !event || !event.timestamp || !event.action || !event.camera_source) {
+      return res.status(400).json({ message: 'Missing required fields: person_cmsId, person_name, event (with timestamp, action, camera_source)' });
     }
 
-    // Find the person to get their current status
-    const person = await Person.findById(personId);
-    if (!person) {
-      return res.status(404).json({ message: 'Person not found' });
+    // Handle "Unknown" person_cmsId: always create a new log for "Unknown"
+    if (person_cmsId === "Unknown") {
+      const newLog = new DetectionLog({
+        person_cmsId,
+        person_name,
+        status, // Include status if provided
+        events: [event]
+      });
+      await newLog.save();
+      return res.status(201).json(newLog);
     }
 
-    // Create the new log
-    const newLog = new DetectionLog({
-      person: personId,
-      status: person.status, // Log the status at the time of detection
-      location,
-      capturedImage,
-      timestamp: new Date()
-    });
-
-    const savedLog = await newLog.save();
-    
-    // Populate the person details before sending the response
-    const populatedLog = await DetectionLog.findById(savedLog._id)
-                                        .populate('person', 'name cmsId');
-
-    res.status(201).json(populatedLog);
+    // Try to find an existing log for this person if not "Unknown"
+    let log = await DetectionLog.findOne({ person_cmsId });
+    if (log) {
+      // Append the new event
+      log.events.push(event);
+      // Update person_name and status if they have changed or are newly provided
+      if (person_name && log.person_name !== person_name) {
+        log.person_name = person_name;
+      }
+      if (status && log.status !== status) { // Update status if provided and different
+        log.status = status;
+      }
+      await log.save();
+      res.status(200).json(log);
+    } else {
+      // Create a new log for this person
+      const newLog = new DetectionLog({
+        person_cmsId,
+        person_name,
+        status, // Include status if provided
+        events: [event]
+      });
+      await newLog.save();
+      res.status(201).json(newLog);
+    }
   } catch (error) {
     console.error('Error adding detection log:', error);
     res.status(500).json({ message: 'Server error' });

@@ -1,34 +1,38 @@
 [
     {
-        "timestamp": "2025-05-15T18:30:16.574713Z",
-        "person_cmsId": "023-20-0179",
-        "person_name": "shafique",
-        "action": "OUT",
-        "camera_source": "webcam",
-        "image_saved": "capturedfaces\\recognized_023-20-0179_OUT_1747333816573.jpg"
+        "person_cmsId": "Unknown",
+        "person_name": "Unknown",
+        "events": [
+            {
+                "timestamp": "2025-05-18T04:43:41.242338Z",
+                "action": "OUT",
+                "camera_source": "webcam",
+                "image_saved": null
+            }
+        ]
     },
     {
-        "timestamp": "2025-05-15T18:30:21.768777Z",
         "person_cmsId": "023-20-0179",
         "person_name": "shafique",
-        "action": "IN",
-        "camera_source": "webcam",
-        "image_saved": "capturedfaces\\recognized_023-20-0179_IN_1747333821766.jpg"
-    },
-    {
-        "timestamp": "2025-05-15T18:30:27.288738Z",
-        "person_cmsId": "023-20-0179",
-        "person_name": "shafique",
-        "action": "OUT",
-        "camera_source": "webcam",
-        "image_saved": "capturedfaces\\recognized_023-20-0179_OUT_1747333827286.jpg"
-    },
-    {
-        "timestamp": "2025-05-15T18:30:31.568701Z",
-        "person_cmsId": "023-20-0179",
-        "person_name": "shafique",
-        "action": "IN",
-        "camera_source": "webcam",
-        "image_saved": "capturedfaces\\recognized_023-20-0179_IN_1747333831565.jpg"
+        "events": [
+            {
+                "timestamp": "2025-05-18T04:45:11.281821Z",
+                "action": "IN",
+                "camera_source": "webcam",
+                "image_saved": "capturedfaces\\recognized_023-20-0179_IN_1747543511277.jpg"
+            },
+            {
+                "timestamp": "2025-05-18T04:45:13.860651Z",
+                "action": "OUT",
+                "camera_source": "webcam",
+                "image_saved": "capturedfaces\\recognized_023-20-0179_OUT_1747543513857.jpg"
+            },
+            {
+                "timestamp": "2025-05-18T04:45:17.079545Z",
+                "action": "IN",
+                "camera_source": "webcam",
+                "image_saved": "capturedfaces\\recognized_023-20-0179_IN_1747543517077.jpg"
+            }
+        ]
     }
 ]

@@ -22,13 +22,34 @@ const Dashboard = () => {
       ]);
 
       const persons = personsResponse.data;
-      const logs = logsResponse.data;
+      const logs = logsResponse.data; // logs is an array of DetectionLog documents
+
+      // Process logs to get recent detections with latest event data
+      const processedRecentDetections = logs
+        .map((log) => {
+          if (log.events && log.events.length > 0) {
+            // Assuming events are pushed chronologically, the last one is the latest
+            const latestEvent = log.events[log.events.length - 1];
+            return {
+              id: log._id, // Use the main log ID as key for the row
+              person_name: log.person_name || 'Unknown',
+              timestamp: latestEvent.timestamp,
+              status: log.status, // This is the person's status (e.g., allowed, banned)
+              location: latestEvent.location,
+              // eventType: latestEvent.eventType, // Available if needed
+            };
+          }
+          return null; // This log has no events, so it won't be shown in recent detections
+        })
+        .filter((detection) => detection !== null) // Remove null entries (logs with no events)
+        .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)) // Sort by the latest event's timestamp
+        .slice(0, 5); // Get the top 5 recent detections
 
       setStats({
-        totalDetections: logs.length,
+        totalDetections: logs.length, // Total number of unique persons with logs
         allowedPersons: persons.filter((p) => p.status === 'allowed').length,
         bannedPersons: persons.filter((p) => p.status === 'banned').length,
-        recentDetections: logs.slice(0, 5),
+        recentDetections: processedRecentDetections,
       });
     } catch (error) {
       console.error('Error fetching stats:', error);
@@ -63,7 +84,7 @@ const Dashboard = () => {
       </div>
 
       <Card className="p-6">
-        <h2 className="text-xl font-semibold mb-4">Recent  Detections</h2>
+        <h2 className="text-xl font-semibold mb-4">Recent Detections</h2>
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-gray-200">
             <thead className="bg-gray-50">
@@ -83,29 +104,31 @@ const Dashboard = () => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {stats.recentDetections.map((log) => (
-                <tr key={log.id}>
+              {stats.recentDetections.map((detection) => (
+                <tr key={detection.id}>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm font-medium text-gray-900">
-                      {log.person.name}
+                      {detection.person_name}
                     </div>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {new Date(log.timestamp).toLocaleString()}
+                    {new Date(detection.timestamp).toLocaleString()}
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span
                       className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                        log.status === 'allowed'
+                        detection.status === 'allowed'
                           ? 'bg-green-100 text-green-800'
-                          : 'bg-red-100 text-red-800'
+                          : detection.status === 'banned'
+                          ? 'bg-red-100 text-red-800'
+                          : 'bg-gray-100 text-gray-800' // Fallback for other statuses
                       }`}
                     >
-                      {log.status}
+                      {detection.status || 'N/A'}
                     </span>
                   </td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    {log.location}
+                    {detection.location || 'N/A'}
                   </td>
                 </tr>
               ))}
@@ -117,4 +140,4 @@ const Dashboard = () => {
   );
 };
 
-export default Dashboard; 
+export default Dashboard;

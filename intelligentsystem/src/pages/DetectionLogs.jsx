@@ -62,45 +62,55 @@ const DetectionLogs = () => {
                     </td>
                   </tr>
                 ) : (
-                  logs.map((log) => (
-                    <tr key={log._id}>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <img
-                          src={log.capturedImage || 'https://via.placeholder.com/100'} // Fallback image
-                          alt="Detection snapshot"
-                          className="h-16 w-16 object-cover border border-gray-200 rounded"
-                          onError={(e) => { e.target.src = 'https://via.placeholder.com/100'; }}
-                        />
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm font-medium text-gray-900">
-                          {log.person?.name || 'N/A'} {/* Handle cases where person might be deleted */}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <div className="text-sm text-gray-500">
-                          {log.person?.cmsId || 'N/A'}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap">
-                        <span
-                          className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
-                            log.status === 'allowed'
-                              ? 'bg-green-100 text-green-800'
-                              : 'bg-red-100 text-red-800'
-                          }`}
-                        >
-                          {log.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {log.location}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                        {new Date(log.timestamp).toLocaleString()}
-                      </td>
-                    </tr>
-                  ))
+                  logs.map((log) => {
+                    // Get the latest event for the person
+                    // Events are pushed, so the last one is the latest.
+                    const latestEvent = log?.events && log.events.length > 0 
+                                      ? log.events[log.events.length - 1] 
+                                      : null;
+
+                    return (
+                      <tr key={log?._id || Math.random()}> {/* Fallback key if log._id is somehow missing */}
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <img
+                            // src={latestEvent?.image_saved ? `http://localhost:5000/${latestEvent.image_saved.replace(/\\\\\\\\/g, '/')}` : 'https://via.placeholder.com/100'}
+                            alt="Detection snapshot"
+                            className="h-16 w-16 object-cover border border-gray-200 rounded"
+                            onError={(e) => { e.target.src = 'https://via.placeholder.com/100'; }}
+                          />
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm font-medium text-gray-900">
+                            {log?.person_name || 'N/A'}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm text-gray-500">
+                            {log?.person_cmsId || 'N/A'}
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span
+                            className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                              log?.status === 'allowed'
+                                ? 'bg-green-100 text-green-800'
+                                : log?.status
+                                ? 'bg-red-100 text-red-800' 
+                                : 'bg-gray-100 text-gray-800'
+                            }`}
+                          >
+                            {log?.status || 'N/A'}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {latestEvent?.camera_source || 'N/A'}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {latestEvent?.timestamp ? new Date(latestEvent.timestamp).toLocaleString() : 'N/A'}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
