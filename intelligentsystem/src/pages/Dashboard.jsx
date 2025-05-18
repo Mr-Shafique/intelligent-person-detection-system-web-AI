@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import Card from '../components/Card';
 import { api } from '../utils/api';
+import Modal from '../components/Modal'; // Import Modal
 
 const Dashboard = () => {
   const [stats, setStats] = useState({
@@ -9,6 +10,8 @@ const Dashboard = () => {
     bannedPersons: 0,
     recentDetections: [],
   });
+  const [isImageModalOpen, setIsImageModalOpen] = useState(false);
+  const [selectedImageUrl, setSelectedImageUrl] = useState('');
 
   useEffect(() => {
     fetchStats();
@@ -35,8 +38,8 @@ const Dashboard = () => {
               person_name: log.person_name || 'Unknown',
               timestamp: latestEvent.timestamp,
               status: log.status, // This is the person's status (e.g., allowed, banned)
-              location: latestEvent.location,
-              // eventType: latestEvent.eventType, // Available if needed
+              location: latestEvent?.camera_source || 'Unknown', // Use the camera source as location
+              image_saved: latestEvent?.image_saved, // Add image_saved
             };
           }
           return null; // This log has no events, so it won't be shown in recent detections
@@ -90,6 +93,9 @@ const Dashboard = () => {
             <thead className="bg-gray-50">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Image
+                </th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                   Name
                 </th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -106,6 +112,22 @@ const Dashboard = () => {
             <tbody className="bg-white divide-y divide-gray-200">
               {stats.recentDetections.map((detection) => (
                 <tr key={detection.id}>
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    {detection.image_saved ? (
+                      <img
+                        src={`http://localhost:5000/${detection.image_saved.replace(/\\\\/g, '/')}`}
+                        alt="Detection snapshot"
+                        className="h-10 w-10 object-cover border border-gray-200 rounded cursor-pointer"
+                        onClick={() => {
+                          setSelectedImageUrl(`http://localhost:5000/${detection.image_saved.replace(/\\\\/g, '/')}`);
+                          setIsImageModalOpen(true);
+                        }}
+                        onError={(e) => { e.target.src = 'https://via.placeholder.com/40'; }}
+                      />
+                    ) : (
+                      <div className="h-10 w-10 flex items-center justify-center bg-gray-100 text-gray-400 rounded">No Img</div>
+                    )}
+                  </td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="text-sm font-medium text-gray-900">
                       {detection.person_name}
@@ -136,6 +158,22 @@ const Dashboard = () => {
           </table>
         </div>
       </Card>
+
+      {isImageModalOpen && (
+        <Modal isOpen={isImageModalOpen} onClose={() => setIsImageModalOpen(false)} title="Image Preview">
+          <div className="mt-4 flex justify-center items-center">
+            <img 
+              src={selectedImageUrl} 
+              alt="Enlarged detection snapshot" 
+              className="max-w-full max-h-[80vh] object-contain"
+              onError={(e) => { 
+                e.target.alt = 'Error loading image'; 
+                // Optionally, display a placeholder or error message within the modal
+              }}
+            />
+          </div>
+        </Modal>
+      )}
     </div>
   );
 };

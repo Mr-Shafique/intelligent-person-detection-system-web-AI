@@ -1,6 +1,6 @@
-import { useEffect } from 'react';
+import React, { useEffect } from 'react';
 
-const Modal = ({ isOpen, onClose, children }) => {
+const Modal = ({ isOpen, onClose, title, children }) => {
   useEffect(() => {
     const handleEscape = (e) => {
       if (e.key === 'Escape') {
@@ -22,31 +22,33 @@ const Modal = ({ isOpen, onClose, children }) => {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
-      <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:block sm:p-0">
-        <div
-          className="fixed inset-0 transition-opacity"
-          aria-hidden="true"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center"
+      style={{
+        backdropFilter: 'blur(8px)', // background blur
+        backgroundColor: 'rgba(0,0,0,0.3)', // semi-transparent dark overlay
+      }}
+    >
+      <div
+        className="bg-white rounded-lg shadow-lg relative"
+        style={{
+          margin: 20, // 20px margin around the popup
+          maxHeight: '90vh',
+          overflowY: 'auto',
+          minWidth: 320,
+        }}
+      >
+        <button
           onClick={onClose}
+          className="absolute top-2 right-2 text-gray-500 hover:text-gray-700 text-xl font-bold"
         >
-          <div className="absolute inset-0 bg-gray-500 opacity-75"></div>
-        </div>
-
-        <span
-          className="hidden sm:inline-block sm:align-middle sm:h-screen"
-          aria-hidden="true"
-        >
-          &#8203;
-        </span>
-
-        <div className="inline-block align-bottom bg-white rounded-lg text-left overflow-hidden shadow-xl transform transition-all sm:my-8 sm:align-middle sm:max-w-lg sm:w-full">
-          <div className="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-            {children}
-          </div>
-        </div>
+          &times;
+        </button>
+        {title && <div className="px-6 pt-6 pb-2 text-lg font-semibold">{title}</div>}
+        <div className="px-6 pb-6">{children}</div>
       </div>
     </div>
   );
 };
 
-export default Modal; 
+export default Modal;

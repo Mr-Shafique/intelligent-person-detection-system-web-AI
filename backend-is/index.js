@@ -19,6 +19,10 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // Serve static files from the uploads directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use(
+  '/capturedfaces',
+  express.static(path.join(__dirname, '..', 'face-detection-system', 'capturedfaces'))
+);
 
 // Connect to MongoDB
 connectDB();

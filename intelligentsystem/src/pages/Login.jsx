@@ -22,9 +22,12 @@ const Login = () => {
         password,
       });
 
-      const { accessToken } = response.data;
-      localStorage.setItem('token', accessToken);
-      login(accessToken);
+      const { token } = response.data;
+      if (token) {
+        // Store the token in localStorage as an object for consistency
+        localStorage.setItem('user', JSON.stringify({ token }));
+      }
+      login(token); // If your AuthContext expects just the token
       navigate('/');
     } catch (err) {
       if (err.response && err.response.data && err.response.data.error) {

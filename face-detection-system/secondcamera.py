@@ -138,11 +138,19 @@ def find_match(live_face_roi, known_embeddings_data, threshold):
 
 # --- Helper Function for Logging to Backend ---
 BACKEND_API_URL = "http://localhost:5000/api/detections"
-def log_detection_event(person_cmsId, person_name, action, camera_source, recognized_face_frame_filename=None, status=None):
+def log_detection_event(person_cmsId, person_name, action, camera_source_input, recognized_face_frame_filename=None, status=None): # param camera_source_input is "webcam" or "ipcam"
+    
+    # Map the input camera source to the desired display name for the log
+    camera_source_for_log = camera_source_input # Default to the input if no specific mapping
+    if camera_source_input == "webcam":
+        camera_source_for_log = "Block 1"
+    elif camera_source_input == "ipcam":
+        camera_source_for_log = "Block 2"
+
     event = {
         "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
         "action": action,
-        "camera_source": camera_source,
+        "camera_source": camera_source_for_log, # Use the mapped name here
         "image_saved": recognized_face_frame_filename,
         "person_status_at_event": str(status) if status else "Unknown"
     }
@@ -157,7 +165,8 @@ def log_detection_event(person_cmsId, person_name, action, camera_source, recogn
     try:
         response = requests.post(BACKEND_API_URL, json=payload, timeout=2)
         response.raise_for_status()
-        print(f"Logged to backend: {person_name} ({person_cmsId}) - {action} from {camera_source}")
+        # Update the print statement to use the mapped camera name
+        print(f"Logged to backend: {person_name} ({person_cmsId}) - {action} from {camera_source_for_log}")
     except Exception as e:
         print(f"Error sending detection log to backend: {e}")
 
