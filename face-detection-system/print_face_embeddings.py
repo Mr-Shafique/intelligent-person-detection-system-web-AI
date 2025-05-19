@@ -18,5 +18,5 @@ def print_face_embeddings(file_path):
         print(f"Error reading the pickle file: {e}")
 
 if __name__ == "__main__":
-    file_path = "D:\\intelegent-------system\\face-detection-system\\face_embeddings.pkl"
+    file_path = "K:\\fyp\\intelligent-person-detection-system-web-AI\\face-detection-system\\face_embeddings.pkl"
     print_face_embeddings(file_path)
