@@ -10,6 +10,8 @@ import requests
 import datetime
 from deepface import DeepFace
 from scipy.spatial.distance import cosine # For comparing embeddings
+from flask import Flask, Response
+import threading
 
 # --- Configuration ---
 YOLO_MODEL_PATH = 'yolov8n-face.pt'
@@ -173,7 +175,7 @@ def log_detection_event(person_cmsId, person_name, action, camera_source_input, 
 
 # --- Camera Initialization ---
 webcam = cv2.VideoCapture(0)
-ip_camera_url = "http://10.102.138.93:8080/video" # Replace with your IP camera URL
+ip_camera_url = "http://192.168.220.112:8080/video" # Replace with your IP camera URL
 ip_camera = cv2.VideoCapture(ip_camera_url)
 
 webcam_available = webcam.isOpened()
@@ -201,6 +203,42 @@ webcam_frame_count = 0
 ipcam_frame_count = 0
 initial_webcam_intended = webcam_available
 initial_ip_camera_intended = ip_camera_available
+
+# --- Flask App for Streaming ---
+app = Flask(__name__)
+latest_frame = None
+frame_lock = threading.Lock()
+
+def update_latest_frame(frame):
+    global latest_frame
+    with frame_lock:
+        latest_frame = frame.copy() if frame is not None else None
+
+def gen_frames():
+    global latest_frame
+    while True:
+        with frame_lock:
+            frame = latest_frame.copy() if latest_frame is not None else None
+        if frame is not None:
+            ret, buffer = cv2.imencode('.jpg', frame)
+            if not ret:
+                continue
+            frame_bytes = buffer.tobytes()
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
+        else:
+            time.sleep(0.05)
+
+@app.route('/video_feed')
+def video_feed():
+    return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+
+def run_flask():
+    app.run(host='0.0.0.0', port=5002, debug=False, use_reloader=False)
+
+# Start Flask server in a background thread
+flask_thread = threading.Thread(target=run_flask, daemon=True)
+flask_thread.start()
 
 # --- Main Loop ---
 while True:
@@ -531,8 +569,10 @@ while True:
         window_title = 'IP Camera Feed (Recognition)'
     
     if display_frame_final is not None and display_frame_final.size > 0 :
+        update_latest_frame(display_frame_final)
         cv2.imshow(window_title, display_frame_final)
     else:
+        update_latest_frame(None)
         # This case might occur if both cams fail but one wasn't initially intended,
         # or if no camera was intended from the start.
         if not (initial_webcam_intended or initial_ip_camera_intended):

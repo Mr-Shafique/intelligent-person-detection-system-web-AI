@@ -1,8 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Card from '../components/Card';
 import { api } from '../utils/api';
 import Modal from '../components/Modal'; // Import Modal
 import Loader from '../components/Loader';
+import { toast, ToastContainer } from 'react-toastify';
+import 'react-toastify/dist/ReactToastify.css';
 
 const Dashboard = () => {
   const [stats, setStats] = useState({
@@ -13,6 +15,7 @@ const Dashboard = () => {
   });
   const [isImageModalOpen, setIsImageModalOpen] = useState(false);
   const [selectedImageUrl, setSelectedImageUrl] = useState('');
+  const prevLatestDetectionRef = useRef(null);
 
   useEffect(() => {
     fetchStats();
@@ -59,6 +62,22 @@ const Dashboard = () => {
       console.error('Error fetching stats:', error);
     }
   };
+
+  useEffect(() => {
+    if (stats.recentDetections.length > 0) {
+      const latest = stats.recentDetections[0];
+      const prev = prevLatestDetectionRef.current;
+      if (!prev || prev.timestamp !== latest.timestamp || prev.id !== latest.id) {
+        // New detection found
+        if (latest.status === 'banned') {
+          toast.error(`🚨 Banned person detected: ${latest.person_name} in ${latest.location}`);
+        } else {
+          toast.success(`✅ ${latest.person_name} is detected in ${latest.location}`);
+        }
+        prevLatestDetectionRef.current = latest;
+      }
+    }
+  }, [stats.recentDetections]);
 
   return (
     <div className="space-y-6">
@@ -176,6 +195,7 @@ const Dashboard = () => {
         </Modal>
       )}
 
+      <ToastContainer position="top-right" autoClose={4000} hideProgressBar={false} newestOnTop closeOnClick pauseOnFocusLoss draggable pauseOnHover />
     </div>
   );
 };
