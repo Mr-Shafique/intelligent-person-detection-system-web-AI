@@ -147,7 +147,7 @@ def log_detection_event(person_cmsId, person_name, action, camera_source_input, 
     if camera_source_input == "webcam":
         camera_source_for_log = "Block 1"
     elif camera_source_input == "ipcam":
-        camera_source_for_log = "Block 2"
+        camera_source_for_log = "Block 1"
 
     event = {
         "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
@@ -175,7 +175,7 @@ def log_detection_event(person_cmsId, person_name, action, camera_source_input, 
 
 # --- Camera Initialization ---
 webcam = cv2.VideoCapture(0)
-ip_camera_url = "http://10.102.134.12:8080/video" # Replace with your IP camera URL
+ip_camera_url = "http://192.168.220.36:8080/video" # Replace with your IP camera URL
 ip_camera = cv2.VideoCapture(ip_camera_url)
 
 webcam_available = webcam.isOpened()
@@ -396,10 +396,10 @@ while True:
                 cv2.putText(webcam_display_frame, label, (x1, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
 
             # Draw counting lines and counts
-            cv2.line(webcam_display_frame, (0, LINE_A_Y), (640, LINE_A_Y), (0, 255, 0), 2)
-            cv2.putText(webcam_display_frame, "A", (5, LINE_A_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-            cv2.line(webcam_display_frame, (0, LINE_B_Y), (640, LINE_B_Y), (0, 0, 255), 2)
-            cv2.putText(webcam_display_frame, "B", (5, LINE_B_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+            # cv2.line(webcam_display_frame, (0, LINE_A_Y), (640, LINE_A_Y), (0, 255, 0), 2)
+            # cv2.putText(webcam_display_frame, "A", (5, LINE_A_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            # cv2.line(webcam_display_frame, (0, LINE_B_Y), (640, LINE_B_Y), (0, 0, 255), 2)
+            # cv2.putText(webcam_display_frame, "B", (5, LINE_B_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
             cv2.putText(webcam_display_frame, f"IN: {PERSONS_IN_COUNT}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
             cv2.putText(webcam_display_frame, f"OUT: {PERSONS_OUT_COUNT}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
         else: # Webcam frame read failed
@@ -461,14 +461,16 @@ while True:
                     elif not track_data['crossed_B_pending_A'] and prev_cy >= LINE_B_Y and curr_cy < LINE_B_Y:
                         tracked_faces_ip[face_id]['crossed_B_pending_A'] = True
                         tracked_faces_ip[face_id]['crossed_A_pending_B'] = False
+                    # IP Camera: A then B (downwards) is OUT
                     if track_data['crossed_A_pending_B'] and prev_cy < LINE_B_Y and curr_cy >= LINE_B_Y:
-                        IP_PERSONS_IN_COUNT += 1
-                        action_taken = "IN"
+                        IP_PERSONS_OUT_COUNT += 1 # Changed from IN to OUT
+                        action_taken = "OUT"      # Changed from IN to OUT
                         tracked_faces_ip[face_id]['crossed_A_pending_B'] = False
                         tracked_faces_ip[face_id]['crossed_B_pending_A'] = False
+                    # IP Camera: B then A (upwards) is IN
                     elif track_data['crossed_B_pending_A'] and prev_cy >= LINE_A_Y and curr_cy < LINE_A_Y:
-                        IP_PERSONS_OUT_COUNT += 1
-                        action_taken = "OUT"
+                        IP_PERSONS_IN_COUNT += 1 # Changed from OUT to IN
+                        action_taken = "IN"       # Changed from OUT to IN
                         tracked_faces_ip[face_id]['crossed_B_pending_A'] = False
                         tracked_faces_ip[face_id]['crossed_A_pending_B'] = False
                     # Reset pending states if person turns back
@@ -516,6 +518,7 @@ while True:
                     'status': status,
                     'recognized_in_session': True if cmsId else False
                 }
+            # Draw bounding boxes and info for all current tracks on ipcam_display_frame
             for face_id, track_data in tracked_faces_ip.items():
                 x1, y1, x2, y2 = track_data['box']
                 color = (255, 0, 0) if track_data['cmsId'] else (0, 0, 255)
@@ -526,12 +529,13 @@ while True:
                 if display_status and display_name != "Unknown":
                     label += f" ({display_status})"
                 cv2.putText(ipcam_display_frame, label, (x1, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-            cv2.line(ipcam_display_frame, (0, LINE_A_Y), (640, LINE_A_Y), (0, 255, 0), 2)
-            cv2.putText(ipcam_display_frame, "A", (5, LINE_A_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-            cv2.line(ipcam_display_frame, (0, LINE_B_Y), (640, LINE_B_Y), (0, 0, 255), 2)
-            cv2.putText(ipcam_display_frame, "B", (5, LINE_B_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-            cv2.putText(ipcam_display_frame, f"IN: {IP_PERSONS_IN_COUNT}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-            cv2.putText(ipcam_display_frame, f"OUT: {IP_PERSONS_OUT_COUNT}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            # Draw counting lines and counts for IP Camera
+            # cv2.line(ipcam_display_frame, (0, LINE_A_Y), (640, LINE_A_Y), (0, 255, 0), 2)
+            # cv2.putText(ipcam_display_frame, "A", (5, LINE_A_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+            # cv2.line(ipcam_display_frame, (0, LINE_B_Y), (640, LINE_B_Y), (0, 0, 255), 2)
+            # cv2.putText(ipcam_display_frame, "B", (5, LINE_B_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+            cv2.putText(ipcam_display_frame, f"IP IN: {IP_PERSONS_IN_COUNT}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+            cv2.putText(ipcam_display_frame, f"IP OUT: {IP_PERSONS_OUT_COUNT}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
         else:
             print("Warning: IP camera frame read failed. Marking as unavailable.")
             if ip_camera is not None: ip_camera.release()
