@@ -1,4 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
+// Sound alert for new detection log
+const newLogAudio = new Audio('/preview.mp3'); // Place preview.mp3 in public/
+
 import Card from '../components/Card';
 import { api } from '../utils/api';
 import Modal from '../components/Modal'; // Import Modal
@@ -69,6 +72,7 @@ const Dashboard = () => {
       const prev = prevLatestDetectionRef.current;
       if (!prev || prev.timestamp !== latest.timestamp || prev.id !== latest.id) {
         // New detection found
+        try { newLogAudio.currentTime = 0; newLogAudio.play(); } catch (e) {}
         if (latest.status === 'banned') {
           toast.error(`🚨 Banned person detected: ${latest.person_name} in ${latest.location}`);
         } else {

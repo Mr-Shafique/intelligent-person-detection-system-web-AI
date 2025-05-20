@@ -14,8 +14,12 @@ const DetectionLogs = () => {
   const [selectedImageUrl, setSelectedImageUrl] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [dateFilter, setDateFilter] = useState('');
+  const [selectedAnalysisLog, setSelectedAnalysisLog] = useState(null);
+  const [isAnalysisModalOpen, setIsAnalysisModalOpen] = useState(false);
+  const [analysisDate, setAnalysisDate] = useState('');
 
-    useEffect(() => {
+
+  useEffect(() => {
     fetchLogs();
     const interval = setInterval(() => {
       fetchLogs();
@@ -61,6 +65,45 @@ const DetectionLogs = () => {
     }
     return (nameMatch || cmsIdMatch) && dateMatch;
   });
+
+  function getAnalysisForDate(log, date) {
+    if (!log || !log.events) return {};
+
+    // Filter events for the selected date
+    const events = log.events.filter(ev => {
+      if (!ev.timestamp) return false;
+      const eventDate = new Date(ev.timestamp).toISOString().slice(0, 10);
+      return eventDate === date;
+    }).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+    // Group by block
+    const blocks = {};
+    events.forEach(ev => {
+      const block = ev.camera_source || 'Unknown';
+      if (!blocks[block]) {
+        blocks[block] = { in: 0, out: 0, times: [], totalTimeMs: 0 };
+      }
+      if (ev.action === 'IN') {
+        blocks[block].in += 1;
+        blocks[block].times.push({ in: new Date(ev.timestamp), out: null });
+      } else if (ev.action === 'OUT') {
+        blocks[block].out += 1;
+        // Pair with last unmatched IN
+        const last = blocks[block].times.find(t => t.out === null);
+        if (last) last.out = new Date(ev.timestamp);
+      }
+    });
+
+    // Calculate total time spent per block
+    Object.values(blocks).forEach(block => {
+      block.totalTimeMs = block.times.reduce((sum, t) => {
+        if (t.in && t.out) return sum + (t.out - t.in);
+        return sum;
+      }, 0);
+    });
+
+    return blocks;
+  }
 
   return (
     <div className="space-y-6">
@@ -119,12 +162,15 @@ const DetectionLogs = () => {
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                     Actions
                   </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Detailed Analysis
+                  </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {filteredLogs.length === 0 ? (
                   <tr>
-                    <td colSpan="7" className="px-6 py-4 text-center text-gray-500">
+                    <td colSpan="8" className="px-6 py-4 text-center text-gray-500">
                       No detection logs found.
                     </td>
                   </tr>
@@ -184,6 +230,17 @@ const DetectionLogs = () => {
                             View More
                           </button>
                         </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
+                          <button
+                            onClick={() => {
+                              setSelectedAnalysisLog(log);
+                              setIsAnalysisModalOpen(true);
+                            }}
+                            className="bg-purple-500 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded"
+                          >
+                            Detailed Analysis
+                          </button>
+                        </td>
                       </tr>
                     );
                   })
@@ -207,7 +264,7 @@ const DetectionLogs = () => {
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Image</th>
                       <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Location</th>
-                      <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Action (In/Out)</th>
+                      <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">IN/OUT</th>
                       <th className="px-6 py-3 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Timestamp</th>
                     </tr>
                   </thead>
@@ -228,7 +285,7 @@ const DetectionLogs = () => {
                           )}
                         </td>
                         <td className="px-6 py-3 whitespace-nowrap text-base text-gray-700">{event.camera_source || 'N/A'}</td>
-                        <td className="px-6 py-3 whitespace-nowrap text-base text-gray-700">{event.action || 'N/A'}</td>
+                        <td className="px-6 py-3 whitespace-nowrap text-base text-gray-700">{event.action === 'IN' ? 'IN' : event.action === 'OUT' ? 'OUT' : 'N/A'}</td>
                         <td className="px-6 py-3 whitespace-nowrap text-base text-gray-700">
                           {event.timestamp ? new Date(event.timestamp).toLocaleString() : 'N/A'}
                         </td>
@@ -257,6 +314,54 @@ const DetectionLogs = () => {
               }}
             />
           </div>
+        </Modal>
+      )}
+
+      {selectedAnalysisLog && (
+        <Modal isOpen={isAnalysisModalOpen} onClose={() => setIsAnalysisModalOpen(false)} title={`Detailed Analysis for ${selectedAnalysisLog.person_name}`}>
+          <div className="mb-4">
+            <input
+              type="date"
+              value={analysisDate}
+              onChange={e => setAnalysisDate(e.target.value)}
+              className="border border-gray-300 rounded px-4 py-2"
+            />
+          </div>
+          {analysisDate ? (
+            (() => {
+              const blocks = getAnalysisForDate(selectedAnalysisLog, analysisDate);
+              const blockNames = Object.keys(blocks);
+              if (blockNames.length === 0) return <p>No data for this date.</p>;
+              return (
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead>
+                    <tr>
+                      <th>Block</th>
+                      <th>Entries (IN)</th>
+                      <th>Exits (OUT)</th>
+                      <th>Total Time Spent</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {blockNames.map(block => (
+                      <tr key={block}>
+                        <td>{block}</td>
+                        <td>{blocks[block].in}</td>
+                        <td>{blocks[block].out}</td>
+                        <td>
+                          {blocks[block].totalTimeMs > 0
+                            ? new Date(blocks[block].totalTimeMs).toISOString().substr(11, 8)
+                            : '0:00:00'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              );
+            })()
+          ) : (
+            <p>Please select a date.</p>
+          )}
         </Modal>
       )}
     </div>
