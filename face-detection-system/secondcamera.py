@@ -12,15 +12,83 @@ from deepface import DeepFace
 from scipy.spatial.distance import cosine # For comparing embeddings
 from flask import Flask, Response
 import threading
+from queue import Queue as ThreadQueue # For thread-safe frame passing (renamed to avoid conflict if user defines another Queue)
 
 # --- Configuration ---
 YOLO_MODEL_PATH = 'yolov8n-face.pt'
 EMBEDDINGS_FILE = 'face_embeddings.pkl'
 OUTPUT_DIR = 'capturedfaces'
-DETECTION_LOG_FILE = "detectionlog.json"
-RECOGNITION_THRESHOLD = 0.6 # Cosine distance; lower is more similar. Adjust as needed. Max is around 0.6 for SFace being a decent match.
-PROCESS_EVERY_N_FRAMES =1 # Process every Nth frame for detection & recognition
+DETECTION_LOG_FILE = "detectionlog.json" # Not actively used for writing in this version, but kept for reference
+RECOGNITION_THRESHOLD = 0.4 # Cosine distance; lower is more similar.
+RECOGNITION_RE_MATCH_THRESHOLD = 0.3 # Slightly more lenient for re-matching from recently_lost_cache
+PROCESS_EVERY_N_FRAMES = 5  # Process every Nth frame for detection & recognition. HIGHER = SMOOTHER VISUALS, LESS FREQUENT UPDATES.
 FACE_CLASS_ID = 0 # Assuming class 0 is 'face' for yolov8n-face.pt
+RECENTLY_LOST_TIMEOUT_SECONDS = 10 # How long to keep a face in the 'recently_lost' cache
+
+# --- Thread-safe Camera Stream Class ---
+class CameraStream:
+    def __init__(self, src=0, name="CameraStream"):
+        self.stream = None # Initialize to None
+        try:
+            self.stream = cv2.VideoCapture(src)
+            if not self.stream or not self.stream.isOpened():
+                print(f"Warning: Could not open camera {src}")
+                self.grabbed = False
+                self.frame = None
+                self.running = False
+                return
+        except Exception as e:
+            print(f"Exception opening camera {src}: {e}")
+            self.grabbed = False
+            self.frame = None
+            self.running = False
+            return
+
+
+        self.grabbed, self.frame = self.stream.read()
+        if not self.grabbed:
+             print(f"Warning: {self.name} - initial frame read failed.")
+             self.running = False
+             if self.stream.isOpened(): self.stream.release()
+             return
+
+        self.name = name
+        self.running = True
+        self.thread = threading.Thread(target=self.update, name=self.name, args=())
+        self.thread.daemon = True
+        self.thread.start()
+        print(f"{self.name} started.")
+
+    def update(self):
+        while self.running:
+            if self.stream and self.stream.isOpened():
+                grabbed, frame = self.stream.read()
+                if not grabbed:
+                    print(f"Warning: {self.name} - frame read failed or stream ended.")
+                    self.running = False
+                    break
+                self.frame = frame
+            else:
+                print(f"Warning: {self.name} - stream is not open in update loop.")
+                self.running = False
+                break
+            time.sleep(0.01)
+
+    def read(self):
+        return self.frame
+
+    def stop(self):
+        print(f"Stopping {self.name}...")
+        self.running = False
+        if hasattr(self, 'thread') and self.thread.is_alive():
+            self.thread.join(timeout=1)
+        if self.stream and self.stream.isOpened():
+            self.stream.release()
+        print(f"{self.name} stopped and released.")
+
+    def isOpened(self):
+        return self.stream is not None and self.stream.isOpened() and self.running
+
 
 # --- Person Counting Variables (Webcam & IP Camera) ---
 LINE_A_Y = 200
@@ -29,11 +97,16 @@ PERSONS_IN_COUNT = 0
 PERSONS_OUT_COUNT = 0
 IP_PERSONS_IN_COUNT = 0
 IP_PERSONS_OUT_COUNT = 0
-tracked_faces = {} # {face_id: {'centroid', 'box', 'last_seen_frame', 'crossed_A_pending_B', 'crossed_B_pending_A', 'name', 'cmsId', 'status', 'recognized_in_session'}}
+
+tracked_faces = {} # {face_id: {'centroid', 'box', 'last_seen_frame_count', 'crossed_A_pending_B', 'crossed_B_pending_A', 'name', 'cmsId', 'status', 'live_embedding', 'recognized_in_session'}}
 tracked_faces_ip = {}
 next_face_id = 0
 next_face_id_ip = 0
-MAX_FRAMES_UNSEEN = 15 # Increased for potentially slower recognition step
+
+recently_lost_faces_webcam = {} # { face_id: {'name', 'cmsId', 'status', 'last_embedding', 'lost_timestamp', 'last_box'} }
+recently_lost_faces_ip = {}
+
+MAX_FRAMES_UNSEEN_PROCESSING_CYCLES = 3 # No. of *processing cycles* a track can be unseen. e.g. if PROCESS_EVERY_N_FRAMES=5, this means 3*5=15 actual frames.
 CENTROID_MATCH_THRESHOLD = 75
 
 # --- Load YOLOv8 model ---
@@ -59,20 +132,21 @@ def load_known_embeddings(file_path=EMBEDDINGS_FILE):
             print(f"Error loading embeddings from {file_path}: {e}")
             known_face_embeddings = []
     else:
-        print(f"Warning: Embedding file {file_path} not found. Recognition will not work.")
+        print(f"Warning: Embedding file {file_path} not found. Recognition will not work well for new faces.")
         known_face_embeddings = []
 
 load_known_embeddings()
 
 # --- Helper Functions for Face Recognition ---
 def create_face_embedding_live(face_roi):
+    if face_roi is None or face_roi.size == 0:
+        return None
     try:
-        # DeepFace.represent expects BGR numpy array
         embedding_obj = DeepFace.represent(face_roi,
-                                           model_name="Facenet",
+                                           model_name="Facenet", # Consider "SFace" for speed
                                            enforce_detection=False,
                                            detector_backend='skip',
-                                           align=True) # Align helps SFace
+                                           align=True)
         if embedding_obj and len(embedding_obj) > 0 and "embedding" in embedding_obj[0]:
             return embedding_obj[0]["embedding"]
     except Exception as e:
@@ -80,518 +154,486 @@ def create_face_embedding_live(face_roi):
         pass
     return None
 
-def find_match(live_face_roi, known_embeddings_data, threshold):
-    live_embedding = create_face_embedding_live(live_face_roi)
+def find_match_against_known_db(live_embedding, known_embeddings_data, threshold):
     if not live_embedding:
-        return "Unknown", None, None, float('inf') # Ensure 4-tuple return
+        return "Unknown", None, None, float('inf')
+    if not known_embeddings_data:
+        return "Unknown", None, None, float('inf')
 
-    if not known_embeddings_data: # No known embeddings to compare against
-        return "Unknown", None, None, float('inf') # Ensure 4-tuple return
-
-    v1 = np.array(live_embedding)
-    if v1.ndim > 1: v1 = v1.flatten()
-
-    # Variables to store the details of the closest face found
+    v1 = np.array(live_embedding).flatten()
     closest_distance = float('inf')
     matched_name = "Unknown"
     matched_cmsId = None
-    # This will store the status from the PKL file for the closest face.
-    # If 'status' key is missing for that specific entry, it will be None.
-    matched_status_from_pkl = None 
+    matched_status_from_pkl = None
 
     for known_entry in known_embeddings_data:
         known_embedding_vector = known_entry.get("imageEmbedding")
         if not known_embedding_vector:
-            # print(f"Warning: Skipping known_entry due to missing 'imageEmbedding': {known_entry.get('name')}")
             continue
-
-        v2 = np.array(known_embedding_vector)
-        if v2.ndim > 1: v2 = v2.flatten()
-
+        v2 = np.array(known_embedding_vector).flatten()
         if v1.shape != v2.shape:
-            # print(f"Warning: Skipping embedding due to shape mismatch for {known_entry.get('name')}. Live: {v1.shape}, Known: {v2.shape}")
             continue
-        
         try:
             distance = cosine(v1, v2)
-        except Exception as e:
-            # print(f"Error calculating cosine distance for {known_entry.get('name')}: {e}")
-            continue # Skip this entry
-
+        except Exception:
+            continue
         if distance < closest_distance:
             closest_distance = distance
-            # This is the new closest face found so far. Store its details.
             matched_name = known_entry.get("name", "Error: Name Missing")
             matched_cmsId = known_entry.get("cmsId", "Error: CMS ID Missing")
-            # Get the status directly from the pkl entry.
-            # If 'status' key is missing in pkl for this entry, matched_status_from_pkl will be None.
-            matched_status_from_pkl = known_entry.get("status") 
-                                                
-    # After checking all known entries, if the closest one meets the threshold, it's a confident match.
+            matched_status_from_pkl = known_entry.get("status")
+
     if closest_distance <= threshold:
-        # Return the details of the confident match.
-        # matched_status_from_pkl will be the actual status string (e.g., "banned") or None.
-        # log_detection_event will handle a None status by converting it to "Unknown".
         return matched_name, matched_cmsId, matched_status_from_pkl, closest_distance
     else:
-        # No confident match found, return "Unknown" and None for status.
         return "Unknown", None, None, closest_distance
-
 
 # --- Helper Function for Logging to Backend ---
 BACKEND_API_URL = "http://localhost:5000/api/detections"
-def log_detection_event(person_cmsId, person_name, action, camera_source_input, recognized_face_frame_filename=None, status=None): # param camera_source_input is "webcam" or "ipcam"
-    
-    # Map the input camera source to the desired display name for the log
-    camera_source_for_log = camera_source_input # Default to the input if no specific mapping
-    if camera_source_input == "webcam":
-        camera_source_for_log = "Block 1"
-    elif camera_source_input == "ipcam":
-        camera_source_for_log = "Block 1"
-
+def log_detection_event(person_cmsId, person_name, action, camera_source_input, recognized_face_frame_filename=None, status=None):
+    camera_source_for_log = "Block 1" if camera_source_input in ["webcam", "ipcam"] else camera_source_input
     event = {
         "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
         "action": action,
-        "camera_source": camera_source_for_log, # Use the mapped name here
+        "camera_source": camera_source_for_log,
         "image_saved": recognized_face_frame_filename,
         "person_status_at_event": str(status) if status else "Unknown"
     }
     payload = {
         "person_cmsId": str(person_cmsId) if person_cmsId else "Unknown",
         "person_name": str(person_name) if person_name else "Unknown",
-        "status": str(status) if status else "Unknown"  # Always include status, default to "Unknown"
+        "status": str(status) if status else "Unknown",
+        "event": event
     }
-
-    payload["event"] = event # Add event object last
-    
     try:
         response = requests.post(BACKEND_API_URL, json=payload, timeout=2)
         response.raise_for_status()
-        # Update the print statement to use the mapped camera name
         print(f"Logged to backend: {person_name} ({person_cmsId}) - {action} from {camera_source_for_log}")
     except Exception as e:
         print(f"Error sending detection log to backend: {e}")
 
-
 # --- Camera Initialization ---
-webcam = cv2.VideoCapture(0)
-ip_camera_url = "http://10.102.128.164:8080/video" # Replace with your IP camera URL
-ip_camera = cv2.VideoCapture(ip_camera_url)
+webcam_src = 0
+ip_camera_url = "http://10.102.138.230:8080/video"
 
-webcam_available = webcam.isOpened()
-if not webcam_available:
-    print("Warning: Could not open the webcam.")
+webcam_stream = CameraStream(src=webcam_src, name="WebcamStream")
+ip_camera_stream = CameraStream(src=ip_camera_url, name="IPCameraStream")
 
-ip_camera_available = ip_camera.isOpened()
-if not ip_camera_available:
-    print("Warning: Could not connect to the IP camera.")
+webcam_available = webcam_stream.isOpened()
+ip_camera_available = ip_camera_stream.isOpened()
 
 if not webcam_available and not ip_camera_available:
     print("Error: Neither webcam nor IP camera is available. Exiting.")
-    if webcam is not None and webcam.isOpened(): webcam.release()
-    if ip_camera is not None and ip_camera.isOpened(): ip_camera.release()
+    if webcam_stream: webcam_stream.stop()
+    if ip_camera_stream: ip_camera_stream.stop()
     cv2.destroyAllWindows()
     exit()
 
 print("Press 'q' to quit.")
 print(f"Recognition threshold (cosine distance): {RECOGNITION_THRESHOLD} (lower is stricter)")
+print(f"Processing every {PROCESS_EVERY_N_FRAMES} frames for AI tasks.")
 
 if LINE_A_Y >= LINE_B_Y:
     print("Critical Warning: LINE_A_Y should be less than LINE_B_Y for IN=downwards logic.")
 
-webcam_frame_count = 0
-ipcam_frame_count = 0
+webcam_frame_counter = 0 # Renamed to avoid conflict with cv2.CAP_PROP_FRAME_COUNT
+ipcam_frame_counter = 0  # Renamed
+
 initial_webcam_intended = webcam_available
 initial_ip_camera_intended = ip_camera_available
 
 # --- Flask App for Streaming ---
 app = Flask(__name__)
-latest_frame = None
-frame_lock = threading.Lock()
+latest_frame_flask = None # Renamed to avoid confusion with other 'frame' variables
+frame_lock_flask = threading.Lock()
 
-def update_latest_frame(frame):
-    global latest_frame
-    with frame_lock:
-        latest_frame = frame.copy() if frame is not None else None
+def update_latest_frame_flask(frame):
+    global latest_frame_flask
+    with frame_lock_flask:
+        latest_frame_flask = frame.copy() if frame is not None else None
 
-def gen_frames():
-    global latest_frame
+def gen_frames_flask():
+    global latest_frame_flask
     while True:
-        with frame_lock:
-            frame = latest_frame.copy() if latest_frame is not None else None
-        if frame is not None:
-            ret, buffer = cv2.imencode('.jpg', frame)
+        with frame_lock_flask:
+            frame_to_encode = latest_frame_flask.copy() if latest_frame_flask is not None else None
+        if frame_to_encode is not None:
+            ret, buffer = cv2.imencode('.jpg', frame_to_encode)
             if not ret:
+                time.sleep(0.01) # Avoid busy loop on encoding failure
                 continue
             frame_bytes = buffer.tobytes()
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
         else:
-            time.sleep(0.05)
+            time.sleep(0.05) # Wait if no frame is available
 
 @app.route('/video_feed')
-def video_feed():
-    return Response(gen_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
+def video_feed_flask():
+    return Response(gen_frames_flask(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 def run_flask():
+    print("Starting Flask server on 0.0.0.0:5002")
     app.run(host='0.0.0.0', port=5002, debug=False, use_reloader=False)
 
-# Start Flask server in a background thread
 flask_thread = threading.Thread(target=run_flask, daemon=True)
 flask_thread.start()
 
 # --- Main Loop ---
+processing_frame_count_webcam = 0 # Counts frames on which processing is done
+processing_frame_count_ipcam = 0   # Counts frames on which processing is done
+
 while True:
     webcam_display_frame = None
     ipcam_display_frame = None
+    frame_webcam_original = None
+    frame_ip_original = None
 
-    # --- Process Webcam (with IN/OUT counting and recognition) ---
+    # --- Process Webcam ---
     if webcam_available:
-        ret_webcam, frame_webcam_original = webcam.read()
-        if ret_webcam:
-            webcam_frame_count += 1
-            resized_webcam_for_detection = cv2.resize(frame_webcam_original, (640, 480))
-            scale_x = frame_webcam_original.shape[1] / 640.0
-            scale_y = frame_webcam_original.shape[0] / 480.0
-            webcam_display_frame = frame_webcam_original.copy() # For drawing
+        frame_webcam_original = webcam_stream.read()
+        if frame_webcam_original is not None:
+            webcam_frame_counter += 1
+            webcam_display_frame = frame_webcam_original.copy() # Always have a display frame
 
-            current_detections_data = [] # Store {'centroid', 'box', 'face_roi'}
-
-            if webcam_frame_count % PROCESS_EVERY_N_FRAMES == 0:
-                results_webcam = model(resized_webcam_for_detection, conf=0.5, verbose=False) # Lower conf for more detections if needed
+            if webcam_frame_counter % PROCESS_EVERY_N_FRAMES == 0:
+                processing_frame_count_webcam +=1
+                resized_webcam_for_detection = cv2.resize(frame_webcam_original, (640, 480))
+                scale_x = frame_webcam_original.shape[1] / 640.0
+                scale_y = frame_webcam_original.shape[0] / 480.0
                 
+                current_detections_data = []
+                results_webcam = model(resized_webcam_for_detection, conf=0.5, verbose=False)
                 if results_webcam and results_webcam[0].boxes.data.numel() > 0:
                     for box_data in results_webcam[0].boxes:
-                        x1, y1, x2, y2 = map(int, box_data.xyxy[0])
-                        x1, y1 = int(x1 * scale_x), int(y1 * scale_y)
-                        x2, y2 = int(x2 * scale_x), int(y2 * scale_y)
-                        face_roi = frame_webcam_original[y1:y2, x1:x2]
-                        cx = (x1 + x2) // 2
-                        cy = (y1 + y2) // 2
+                        x1_r, y1_r, x2_r, y2_r = map(int, box_data.xyxy[0]) # Coords on resized
+                        x1_o, y1_o = int(x1_r * scale_x), int(y1_r * scale_y) # Coords on original
+                        x2_o, y2_o = int(x2_r * scale_x), int(y2_r * scale_y)
+                        
+                        face_roi_original = None
+                        if y1_o < y2_o and x1_o < x2_o: # Ensure valid ROI
+                             face_roi_original = frame_webcam_original[max(0,y1_o):min(frame_webcam_original.shape[0],y2_o), 
+                                                                       max(0,x1_o):min(frame_webcam_original.shape[1],x2_o)]
+                        
+                        cx_o = (x1_o + x2_o) // 2
+                        cy_o = (y1_o + y2_o) // 2
                         current_detections_data.append({
-                            'centroid': (cx, cy),
-                            'box': (x1, y1, x2, y2),
-                            'face_roi': face_roi
+                            'centroid': (cx_o, cy_o),       # On original frame
+                            'box': (x1_o, y1_o, x2_o, y2_o), # On original frame
+                            'face_roi_original': face_roi_original
                         })
                 
-                # --- Webcam Tracking & Recognition Logic ---
-                temp_current_detections = list(current_detections_data) # Copy for matching
-
-                # Try to match existing tracks
-                for face_id, track_data in list(tracked_faces.items()):
-                    best_match_idx = -1
-                    min_dist_centroid = float('inf')
-                    for i, det_data in enumerate(temp_current_detections):
+                matched_track_ids_this_cycle = set()
+                # Match current detections to existing tracks
+                for det_idx, det_data in enumerate(current_detections_data):
+                    best_match_id = -1
+                    min_dist_centroid = CENTROID_MATCH_THRESHOLD 
+                    for face_id, track_data in tracked_faces.items():
                         dist = math.dist(track_data['centroid'], det_data['centroid'])
-                        if dist < CENTROID_MATCH_THRESHOLD and dist < min_dist_centroid:
+                        if dist < min_dist_centroid:
                             min_dist_centroid = dist
-                            best_match_idx = i
+                            best_match_id = face_id
                     
-                    if best_match_idx != -1: 
-                        matched_det_data = temp_current_detections.pop(best_match_idx)
-                        prev_cy = track_data['centroid'][1]
-                        curr_cy = matched_det_data['centroid'][1]
-
-                        tracked_faces[face_id].update({
-                            'centroid': matched_det_data['centroid'],
-                            'box': matched_det_data['box'],
-                            'last_seen_frame': webcam_frame_count
+                    if best_match_id != -1:
+                        matched_track_ids_this_cycle.add(best_match_id)
+                        track = tracked_faces[best_match_id]
+                        prev_cy = track['centroid'][1]
+                        curr_cy = det_data['centroid'][1]
+                        track.update({
+                            'centroid': det_data['centroid'],
+                            'box': det_data['box'],
+                            'last_seen_frame_count': processing_frame_count_webcam # Use processing cycle counter
                         })
-                        
-                        # --- IN/OUT Counting Logic ---
                         action_taken = None
-                        # ... (rest of the IN/OUT logic for A_pending_B, B_pending_A) ...
-                        # Check for crossing Line A towards B (potential IN start)
-                        if not track_data['crossed_A_pending_B'] and \
-                           prev_cy < LINE_A_Y and curr_cy >= LINE_A_Y:
-                            tracked_faces[face_id]['crossed_A_pending_B'] = True
-                            tracked_faces[face_id]['crossed_B_pending_A'] = False
-
-                        # Check for crossing Line B towards A (potential OUT start)
-                        elif not track_data['crossed_B_pending_A'] and \
-                             prev_cy >= LINE_B_Y and curr_cy < LINE_B_Y:
-                            tracked_faces[face_id]['crossed_B_pending_A'] = True
-                            tracked_faces[face_id]['crossed_A_pending_B'] = False
-
-                        # Check for IN completion
-                        if track_data['crossed_A_pending_B'] and \
-                           prev_cy < LINE_B_Y and curr_cy >= LINE_B_Y:
-                            PERSONS_IN_COUNT += 1
-                            action_taken = "IN"
-                            tracked_faces[face_id]['crossed_A_pending_B'] = False
-                            tracked_faces[face_id]['crossed_B_pending_A'] = False
-
-                        # Check for OUT completion
-                        elif track_data['crossed_B_pending_A'] and \
-                             prev_cy >= LINE_A_Y and curr_cy < LINE_A_Y:
-                            PERSONS_OUT_COUNT += 1
-                            action_taken = "OUT"
-                            tracked_faces[face_id]['crossed_B_pending_A'] = False
-                            tracked_faces[face_id]['crossed_A_pending_B'] = False
+                        # ... IN/OUT logic ...
+                        if not track['crossed_A_pending_B'] and prev_cy < LINE_A_Y and curr_cy >= LINE_A_Y: track['crossed_A_pending_B'] = True; track['crossed_B_pending_A'] = False
+                        elif not track['crossed_B_pending_A'] and prev_cy >= LINE_B_Y and curr_cy < LINE_B_Y: track['crossed_B_pending_A'] = True; track['crossed_A_pending_B'] = False
+                        if track['crossed_A_pending_B'] and prev_cy < LINE_B_Y and curr_cy >= LINE_B_Y: PERSONS_IN_COUNT += 1; action_taken = "IN"; track['crossed_A_pending_B'] = False
+                        elif track['crossed_B_pending_A'] and prev_cy >= LINE_A_Y and curr_cy < LINE_A_Y: PERSONS_OUT_COUNT += 1; action_taken = "OUT"; track['crossed_B_pending_A'] = False
+                        if track['crossed_A_pending_B'] and curr_cy < LINE_A_Y: track['crossed_A_pending_B'] = False
+                        if track['crossed_B_pending_A'] and curr_cy >= LINE_B_Y: track['crossed_B_pending_A'] = False
                         
-                        # Reset pending states if person turns back
-                        if track_data['crossed_A_pending_B'] and curr_cy < LINE_A_Y:
-                            tracked_faces[face_id]['crossed_A_pending_B'] = False
-                        if track_data['crossed_B_pending_A'] and curr_cy >= LINE_B_Y:
-                            tracked_faces[face_id]['crossed_B_pending_A'] = False
-
                         if action_taken:
-                            print(f"ID {face_id} ({track_data.get('name', 'Unknown')}) COUNTED {action_taken}. Total IN: {PERSONS_IN_COUNT}, Total OUT: {PERSONS_OUT_COUNT}")
-                            img_filename_event = None
-                            timestamp_img = int(time.time() * 1000)
-                            
-                            # Determine filename based on whether person is recognized or unknown
-                            if track_data.get('cmsId'):
-                                img_filename_event = os.path.join(OUTPUT_DIR, f"recognized_{track_data['cmsId']}_{action_taken}_{timestamp_img}.jpg")
-                            else: # Person is Unknown
-                                img_filename_event = os.path.join(OUTPUT_DIR, f"unknown_webcam_{action_taken}_{timestamp_img}.jpg")
-                            
-                            # Attempt to save the image
-                            try:
-                                cv2.imwrite(img_filename_event, frame_webcam_original) 
-                                print(f"Saved webcam frame for {action_taken}: {img_filename_event}")
-                            except Exception as e:
-                                print(f"Error saving webcam frame {img_filename_event}: {e}")
-                                img_filename_event = None # Ensure it's None if save failed
-                            
-                            log_detection_event(track_data.get('cmsId'), track_data.get('name'), action_taken, "webcam", img_filename_event, track_data.get('status'))
-                    else: # Track not matched
-                        if (webcam_frame_count - track_data['last_seen_frame']) > MAX_FRAMES_UNSEEN:
-                            # print(f"Removing lost track ID {face_id} ({track_data.get('name', 'Unknown')})")
-                            del tracked_faces[face_id]
+                            print(f"ID {best_match_id} ({track.get('name', 'Unknown')}) COUNTED {action_taken}. Total IN: {PERSONS_IN_COUNT}, Total OUT: {PERSONS_OUT_COUNT}")
+                            img_fn = os.path.join(OUTPUT_DIR, f"{('recognized_' + str(track['cmsId'])) if track.get('cmsId') else 'unknown_webcam'}_{action_taken}_{int(time.time() * 1000)}.jpg")
+                            try: cv2.imwrite(img_fn, frame_webcam_original); print(f"Saved: {img_fn}")
+                            except Exception as e: print(f"Err saving {img_fn}: {e}"); img_fn = None
+                            log_detection_event(track.get('cmsId'), track.get('name'), action_taken, "webcam", img_fn, track.get('status'))
+                        current_detections_data[det_idx] = None # Mark as matched
                 
-                # Handle new (unmatched) detections
-                for new_det_data in temp_current_detections:
+                current_detections_data = [d for d in current_detections_data if d is not None] # Filter out matched
+
+                # Handle lost tracks
+                lost_ids = []
+                for face_id, track_data in tracked_faces.items():
+                    if face_id not in matched_track_ids_this_cycle:
+                        if (processing_frame_count_webcam - track_data['last_seen_frame_count']) > MAX_FRAMES_UNSEEN_PROCESSING_CYCLES:
+                            lost_ids.append(face_id)
+                            if track_data.get('cmsId') and track_data.get('live_embedding'):
+                                print(f"Webcam: Moving recognized {track_data['name']} (ID {face_id}) to lost cache.")
+                                recently_lost_faces_webcam[face_id] = {
+                                    'name': track_data['name'], 'cmsId': track_data['cmsId'], 
+                                    'status': track_data['status'], 'last_embedding': track_data['live_embedding'],
+                                    'lost_timestamp': time.time(), 'last_box': track_data['box']
+                                }
+                for face_id in lost_ids: del tracked_faces[face_id]
+
+                # Handle new (unmatched by existing tracks) detections
+                current_time = time.time() # For cache cleanup
+                for lost_id, lost_data in list(recently_lost_faces_webcam.items()): # Cleanup cache
+                    if current_time - lost_data['lost_timestamp'] > RECENTLY_LOST_TIMEOUT_SECONDS:
+                        del recently_lost_faces_webcam[lost_id]
+                
+                for new_det_data in current_detections_data:
                     name, cmsId, status, dist = "Unknown", None, None, float('inf')
-                    if new_det_data['face_roi'] is not None and new_det_data['face_roi'].size > 0 :
-                        name, cmsId, status, dist = find_match(new_det_data['face_roi'], known_face_embeddings, RECOGNITION_THRESHOLD)
+                    live_emb = create_face_embedding_live(new_det_data['face_roi_original'])
+                    revived_id = None
+
+                    if live_emb:
+                        # Try to match with recently lost
+                        best_lost_match_val = float('inf')
+                        for lost_id, lost_data in recently_lost_faces_webcam.items():
+                            dist_to_lost = cosine(np.array(live_emb).flatten(), np.array(lost_data['last_embedding']).flatten())
+                            if dist_to_lost < RECOGNITION_RE_MATCH_THRESHOLD and dist_to_lost < best_lost_match_val:
+                                best_lost_match_val = dist_to_lost
+                                revived_id = lost_id
+                        
+                        if revived_id:
+                            matched_lost_data = recently_lost_faces_webcam[revived_id]
+                            name, cmsId, status, dist = matched_lost_data['name'], matched_lost_data['cmsId'], matched_lost_data['status'], best_lost_match_val
+                            print(f"Webcam: Re-ID {name} from lost cache. Dist: {dist:.3f}")
+                            del recently_lost_faces_webcam[revived_id]
+                        else: # Not in lost cache, try full DB
+                            name, cmsId, status, dist = find_match_against_known_db(live_emb, known_face_embeddings, RECOGNITION_THRESHOLD)
                     
                     new_id = next_face_id
                     next_face_id += 1
                     tracked_faces[new_id] = {
-                        'centroid': new_det_data['centroid'],
-                        'box': new_det_data['box'],
-                        'last_seen_frame': webcam_frame_count,
-                        'crossed_A_pending_B': False,
-                        'crossed_B_pending_A': False,
-                        'name': name,
-                        'cmsId': cmsId,
-                        'status': status,
-                        'recognized_in_session': True if cmsId else False # Mark if recognition attempt led to a match
+                        'centroid': new_det_data['centroid'], 'box': new_det_data['box'],
+                        'last_seen_frame_count': processing_frame_count_webcam,
+                        'crossed_A_pending_B': False, 'crossed_B_pending_A': False,
+                        'name': name, 'cmsId': cmsId, 'status': status,
+                        'live_embedding': live_emb if cmsId else None, # Store if recognized
+                        'recognized_in_session': bool(cmsId)
                     }
-                    # print(f"New track ID {new_id} ({name}, CMS: {cmsId}, Status: {status}, Dist: {dist:.3f}) at {new_det_data['centroid']}")
+                    # print(f"Webcam: New track ID {new_id} ({name}, CMS: {cmsId}, Status: {status}, Dist: {dist:.3f})")
 
-            # Draw bounding boxes and info for all current tracks on webcam_display_frame
+            # Draw on webcam_display_frame (always, using last known track data)
             for face_id, track_data in tracked_faces.items():
                 x1, y1, x2, y2 = track_data['box']
-                color = (255, 0, 0) if track_data['cmsId'] else (0, 0, 255) # Blue if recognized, Red if not
+                color = (255, 0, 0) if track_data['cmsId'] else (0, 0, 255)
                 cv2.rectangle(webcam_display_frame, (x1, y1), (x2, y2), color, 2)
-                
-                display_name = track_data.get('name', 'Unknown')
-                display_status = track_data.get('status', '')
-                label = f"ID:{face_id} {display_name}"
-                if display_status and display_name != "Unknown":
-                    label += f" ({display_status})"
-                
+                label = f"ID:{face_id} {track_data.get('name', 'Unk')}"
+                if track_data.get('status') and track_data.get('name', 'Unk') != 'Unknown': label += f" ({track_data.get('status')})"
                 cv2.putText(webcam_display_frame, label, (x1, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-
-            # Draw counting lines and counts
-            # cv2.line(webcam_display_frame, (0, LINE_A_Y), (640, LINE_A_Y), (0, 255, 0), 2)
-            # cv2.putText(webcam_display_frame, "A", (5, LINE_A_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-            # cv2.line(webcam_display_frame, (0, LINE_B_Y), (640, LINE_B_Y), (0, 0, 255), 2)
-            # cv2.putText(webcam_display_frame, "B", (5, LINE_B_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+            
             cv2.putText(webcam_display_frame, f"IN: {PERSONS_IN_COUNT}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
             cv2.putText(webcam_display_frame, f"OUT: {PERSONS_OUT_COUNT}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
-        else: # Webcam frame read failed
-            print("Warning: Webcam frame read failed. Marking as unavailable.")
-            if webcam is not None: webcam.release()
-            webcam_available = False
-            webcam_display_frame = None
+        else:
+            webcam_stream.stop(); webcam_available = False; webcam_display_frame = None
 
-    # --- Process IP camera (IN/OUT counting and recognition) ---
+    # --- Process IP camera ---
     if ip_camera_available:
-        ret_ip, frame_ip_original = ip_camera.read()
-        if ret_ip:
-            ipcam_frame_count += 1
-            resized_ip_for_detection = cv2.resize(frame_ip_original, (640, 480))
-            ipcam_display_frame = resized_ip_for_detection.copy() # For drawing
-            current_detections_data_ip = []
-            if ipcam_frame_count % PROCESS_EVERY_N_FRAMES == 0:
-                results_ip = model(resized_ip_for_detection, conf=0.5, verbose=False)
+        frame_ip_original = ip_camera_stream.read()
+        if frame_ip_original is not None:
+            ipcam_frame_counter += 1
+            # Always create a display frame, use resized for IP cam display
+            resized_ip_for_display_and_detection = cv2.resize(frame_ip_original, (640, 480))
+            ipcam_display_frame = resized_ip_for_display_and_detection.copy()
+
+            if ipcam_frame_counter % PROCESS_EVERY_N_FRAMES == 0:
+                processing_frame_count_ipcam +=1
+                # Detection is on resized_ip_for_display_and_detection
+                scale_x_ip = frame_ip_original.shape[1] / resized_ip_for_display_and_detection.shape[1]
+                scale_y_ip = frame_ip_original.shape[0] / resized_ip_for_display_and_detection.shape[0]
+
+                current_detections_data_ip = []
+                results_ip = model(resized_ip_for_display_and_detection, conf=0.5, verbose=False)
                 if results_ip and results_ip[0].boxes.data.numel() > 0:
                     for box_data in results_ip[0].boxes:
-                        x1, y1, x2, y2 = map(int, box_data.xyxy[0])
-                        conf_yolo = box_data.conf[0].item()
-                        cls = int(box_data.cls[0].item())
-                        if cls == FACE_CLASS_ID:
-                            y1_crop, y2_crop = max(0, y1), min(resized_ip_for_detection.shape[0], y2)
-                            x1_crop, x2_crop = max(0, x1), min(resized_ip_for_detection.shape[1], x2)
-                            face_roi_ip = None
-                            if y1_crop < y2_crop and x1_crop < x2_crop:
-                                face_roi_ip = resized_ip_for_detection[y1_crop:y2_crop, x1_crop:x2_crop]
-                            cx = (x1 + x2) // 2
-                            cy = (y1 + y2) // 2
-                            current_detections_data_ip.append({
-                                'centroid': (cx, cy),
-                                'box': (x1, y1, x2, y2),
-                                'face_roi': face_roi_ip
-                            })
-            temp_current_detections_ip = list(current_detections_data_ip)
-            for face_id, track_data in list(tracked_faces_ip.items()):
-                best_match_idx = -1
-                min_dist_centroid = float('inf')
-                for i, det_data in enumerate(temp_current_detections_ip):
-                    dist = math.dist(track_data['centroid'], det_data['centroid'])
-                    if dist < CENTROID_MATCH_THRESHOLD and dist < min_dist_centroid:
-                        min_dist_centroid = dist
-                        best_match_idx = i
-                if best_match_idx != -1:
-                    matched_det_data = temp_current_detections_ip.pop(best_match_idx)
-                    prev_cy = track_data['centroid'][1]
-                    curr_cy = matched_det_data['centroid'][1]
-                    tracked_faces_ip[face_id].update({
-                        'centroid': matched_det_data['centroid'],
-                        'box': matched_det_data['box'],
-                        'last_seen_frame': ipcam_frame_count
-                    })
-                    action_taken = None
-                    if not track_data['crossed_A_pending_B'] and prev_cy < LINE_A_Y and curr_cy >= LINE_A_Y:
-                        tracked_faces_ip[face_id]['crossed_A_pending_B'] = True
-                        tracked_faces_ip[face_id]['crossed_B_pending_A'] = False
-                    elif not track_data['crossed_B_pending_A'] and prev_cy >= LINE_B_Y and curr_cy < LINE_B_Y:
-                        tracked_faces_ip[face_id]['crossed_B_pending_A'] = True
-                        tracked_faces_ip[face_id]['crossed_A_pending_B'] = False
-                    # IP Camera: A then B (downwards) is OUT
-                    if track_data['crossed_A_pending_B'] and prev_cy < LINE_B_Y and curr_cy >= LINE_B_Y:
-                        IP_PERSONS_OUT_COUNT += 1 # Changed from IN to OUT
-                        action_taken = "OUT"      # Changed from IN to OUT
-                        tracked_faces_ip[face_id]['crossed_A_pending_B'] = False
-                        tracked_faces_ip[face_id]['crossed_B_pending_A'] = False
-                    # IP Camera: B then A (upwards) is IN
-                    elif track_data['crossed_B_pending_A'] and prev_cy >= LINE_A_Y and curr_cy < LINE_A_Y:
-                        IP_PERSONS_IN_COUNT += 1 # Changed from OUT to IN
-                        action_taken = "IN"       # Changed from OUT to IN
-                        tracked_faces_ip[face_id]['crossed_B_pending_A'] = False
-                        tracked_faces_ip[face_id]['crossed_A_pending_B'] = False
-                    # Reset pending states if person turns back
-                    if track_data['crossed_A_pending_B'] and curr_cy < LINE_A_Y:
-                        tracked_faces_ip[face_id]['crossed_A_pending_B'] = False
-                    if track_data['crossed_B_pending_A'] and curr_cy >= LINE_B_Y:
-                        tracked_faces_ip[face_id]['crossed_B_pending_A'] = False
-                    if action_taken:
-                        print(f"[IPCAM] ID {face_id} ({track_data.get('name', 'Unknown')}) COUNTED {action_taken}. Total IN: {IP_PERSONS_IN_COUNT}, Total OUT: {IP_PERSONS_OUT_COUNT}")
-                        img_filename_event = None
-                        timestamp_img = int(time.time() * 1000)
+                        if int(box_data.cls[0].item()) == FACE_CLASS_ID:
+                            x1_r, y1_r, x2_r, y2_r = map(int, box_data.xyxy[0]) # Coords on resized
 
-                        # Determine filename based on whether person is recognized or unknown
-                        if track_data.get('cmsId'):
-                            img_filename_event = os.path.join(OUTPUT_DIR, f"ipcam_recognized_{track_data['cmsId']}_{action_taken}_{timestamp_img}.jpg")
-                        else: # Person is Unknown
-                            img_filename_event = os.path.join(OUTPUT_DIR, f"ipcam_unknown_{action_taken}_{timestamp_img}.jpg")
+                            # ROI from original frame for better recognition
+                            x1_o, y1_o = int(x1_r * scale_x_ip), int(y1_r * scale_y_ip)
+                            x2_o, y2_o = int(x2_r * scale_x_ip), int(y2_r * scale_y_ip)
+                            face_roi_original_ip = None
+                            if y1_o < y2_o and x1_o < x2_o:
+                                face_roi_original_ip = frame_ip_original[max(0,y1_o):min(frame_ip_original.shape[0],y2_o), 
+                                                                         max(0,x1_o):min(frame_ip_original.shape[1],x2_o)]
+
+                            cx_r = (x1_r + x2_r) // 2 # Centroid on resized for tracking
+                            cy_r = (y1_r + y2_r) // 2
+                            current_detections_data_ip.append({
+                                'centroid': (cx_r, cy_r), # On resized frame
+                                'box_resized': (x1_r, y1_r, x2_r, y2_r), # On resized frame
+                                'face_roi_original': face_roi_original_ip
+                            })
+                
+                matched_track_ids_ip_this_cycle = set()
+                # Match current detections to existing IP tracks
+                for det_idx, det_data in enumerate(current_detections_data_ip):
+                    best_match_id = -1
+                    min_dist_centroid = CENTROID_MATCH_THRESHOLD
+                    for face_id, track_data in tracked_faces_ip.items():
+                        dist = math.dist(track_data['centroid'], det_data['centroid'])
+                        if dist < min_dist_centroid:
+                            min_dist_centroid = dist
+                            best_match_id = face_id
+                    
+                    if best_match_id != -1:
+                        matched_track_ids_ip_this_cycle.add(best_match_id)
+                        track = tracked_faces_ip[best_match_id]
+                        prev_cy = track['centroid'][1]
+                        curr_cy = det_data['centroid'][1]
+                        track.update({
+                            'centroid': det_data['centroid'],
+                            'box_resized': det_data['box_resized'], # Store resized box
+                            'last_seen_frame_count': processing_frame_count_ipcam
+                        })
+                        action_taken = None
+                        # IP Camera IN/OUT (opposite to webcam based on previous logic)
+                        if not track['crossed_A_pending_B'] and prev_cy < LINE_A_Y and curr_cy >= LINE_A_Y: track['crossed_A_pending_B'] = True; track['crossed_B_pending_A'] = False
+                        elif not track['crossed_B_pending_A'] and prev_cy >= LINE_B_Y and curr_cy < LINE_B_Y: track['crossed_B_pending_A'] = True; track['crossed_A_pending_B'] = False
+                        if track['crossed_A_pending_B'] and prev_cy < LINE_B_Y and curr_cy >= LINE_B_Y: IP_PERSONS_OUT_COUNT += 1; action_taken = "OUT"; track['crossed_A_pending_B'] = False # A then B is OUT
+                        elif track['crossed_B_pending_A'] and prev_cy >= LINE_A_Y and curr_cy < LINE_A_Y: IP_PERSONS_IN_COUNT += 1; action_taken = "IN"; track['crossed_B_pending_A'] = False    # B then A is IN
+                        if track['crossed_A_pending_B'] and curr_cy < LINE_A_Y: track['crossed_A_pending_B'] = False
+                        if track['crossed_B_pending_A'] and curr_cy >= LINE_B_Y: track['crossed_B_pending_A'] = False
+
+                        if action_taken:
+                            print(f"[IPCAM] ID {best_match_id} ({track.get('name', 'Unknown')}) COUNTED {action_taken}. Total IN: {IP_PERSONS_IN_COUNT}, Total OUT: {IP_PERSONS_OUT_COUNT}")
+                            img_fn = os.path.join(OUTPUT_DIR, f"{('ipcam_recognized_' + str(track['cmsId'])) if track.get('cmsId') else 'ipcam_unknown'}_{action_taken}_{int(time.time() * 1000)}.jpg")
+                            try: cv2.imwrite(img_fn, frame_ip_original); print(f"Saved IP: {img_fn}") # Save original frame
+                            except Exception as e: print(f"Err saving IP {img_fn}: {e}"); img_fn = None
+                            log_detection_event(track.get('cmsId'), track.get('name'), action_taken, "ipcam", img_fn, track.get('status'))
+                        current_detections_data_ip[det_idx] = None
+                
+                current_detections_data_ip = [d for d in current_detections_data_ip if d is not None]
+
+                # Handle lost IP tracks
+                lost_ids_ip = []
+                for face_id, track_data in tracked_faces_ip.items():
+                    if face_id not in matched_track_ids_ip_this_cycle:
+                        if (processing_frame_count_ipcam - track_data['last_seen_frame_count']) > MAX_FRAMES_UNSEEN_PROCESSING_CYCLES:
+                            lost_ids_ip.append(face_id)
+                            if track_data.get('cmsId') and track_data.get('live_embedding'):
+                                print(f"IPCam: Moving recognized {track_data['name']} (ID {face_id}) to lost cache.")
+                                recently_lost_faces_ip[face_id] = {
+                                    'name': track_data['name'], 'cmsId': track_data['cmsId'],
+                                    'status': track_data['status'], 'last_embedding': track_data['live_embedding'],
+                                    'lost_timestamp': time.time(), 'last_box': track_data['box_resized'] # Store resized box
+                                }
+                for face_id in lost_ids_ip: del tracked_faces_ip[face_id]
+
+                # Handle new IP detections
+                current_time_ip = time.time()
+                for lost_id, lost_data in list(recently_lost_faces_ip.items()): # Cleanup cache
+                    if current_time_ip - lost_data['lost_timestamp'] > RECENTLY_LOST_TIMEOUT_SECONDS:
+                        del recently_lost_faces_ip[lost_id]
+
+                for new_det_data in current_detections_data_ip:
+                    name, cmsId, status, dist = "Unknown", None, None, float('inf')
+                    live_emb = create_face_embedding_live(new_det_data['face_roi_original'])
+                    revived_id_ip = None
+
+                    if live_emb:
+                        best_lost_match_val_ip = float('inf')
+                        for lost_id, lost_data in recently_lost_faces_ip.items():
+                            dist_to_lost = cosine(np.array(live_emb).flatten(), np.array(lost_data['last_embedding']).flatten())
+                            if dist_to_lost < RECOGNITION_RE_MATCH_THRESHOLD and dist_to_lost < best_lost_match_val_ip:
+                                best_lost_match_val_ip = dist_to_lost
+                                revived_id_ip = lost_id
                         
-                        # Attempt to save the image (using frame_ip_original for better quality)
-                        try:
-                            cv2.imwrite(img_filename_event, frame_ip_original) 
-                            print(f"Saved IP cam frame for {action_taken}: {img_filename_event}")
-                        except Exception as e:
-                            print(f"Error saving IP cam frame {img_filename_event}: {e}")
-                            img_filename_event = None # Ensure it's None if save failed
-                            
-                        log_detection_event(track_data.get('cmsId'), track_data.get('name'), action_taken, "ipcam", img_filename_event, track_data.get('status'))
-                else: # Track not matched
-                    if (ipcam_frame_count - track_data['last_seen_frame']) > MAX_FRAMES_UNSEEN:
-                        del tracked_faces_ip[face_id]
-            for new_det_data in temp_current_detections_ip:
-                name, cmsId, status, dist = "Unknown", None, None, float('inf')
-                if new_det_data['face_roi'] is not None and new_det_data['face_roi'].size > 0:
-                    name, cmsId, status, dist = find_match(new_det_data['face_roi'], known_face_embeddings, RECOGNITION_THRESHOLD)
-                new_id = next_face_id_ip
-                next_face_id_ip += 1
-                tracked_faces_ip[new_id] = {
-                    'centroid': new_det_data['centroid'],
-                    'box': new_det_data['box'],
-                    'last_seen_frame': ipcam_frame_count,
-                    'crossed_A_pending_B': False,
-                    'crossed_B_pending_A': False,
-                    'name': name,
-                    'cmsId': cmsId,
-                    'status': status,
-                    'recognized_in_session': True if cmsId else False
-                }
-            # Draw bounding boxes and info for all current tracks on ipcam_display_frame
+                        if revived_id_ip:
+                            matched_lost_data = recently_lost_faces_ip[revived_id_ip]
+                            name, cmsId, status, dist = matched_lost_data['name'], matched_lost_data['cmsId'], matched_lost_data['status'], best_lost_match_val_ip
+                            print(f"IPCam: Re-ID {name} from lost cache. Dist: {dist:.3f}")
+                            del recently_lost_faces_ip[revived_id_ip]
+                        else:
+                            name, cmsId, status, dist = find_match_against_known_db(live_emb, known_face_embeddings, RECOGNITION_THRESHOLD)
+                    
+                    new_id = next_face_id_ip
+                    next_face_id_ip += 1
+                    tracked_faces_ip[new_id] = {
+                        'centroid': new_det_data['centroid'], 'box_resized': new_det_data['box_resized'], # Store resized box
+                        'last_seen_frame_count': processing_frame_count_ipcam,
+                        'crossed_A_pending_B': False, 'crossed_B_pending_A': False,
+                        'name': name, 'cmsId': cmsId, 'status': status,
+                        'live_embedding': live_emb if cmsId else None,
+                        'recognized_in_session': bool(cmsId)
+                    }
+                    # print(f"IPCam: New track ID {new_id} ({name}, CMS: {cmsId}, Status: {status}, Dist: {dist:.3f})")
+            
+            # Draw on ipcam_display_frame (always)
             for face_id, track_data in tracked_faces_ip.items():
-                x1, y1, x2, y2 = track_data['box']
+                x1_r, y1_r, x2_r, y2_r = track_data['box_resized'] # Use resized box for drawing
                 color = (255, 0, 0) if track_data['cmsId'] else (0, 0, 255)
-                cv2.rectangle(ipcam_display_frame, (x1, y1), (x2, y2), color, 2)
-                display_name = track_data.get('name', 'Unknown')
-                display_status = track_data.get('status', '')
-                label = f"ID:{face_id} {display_name}"
-                if display_status and display_name != "Unknown":
-                    label += f" ({display_status})"
-                cv2.putText(ipcam_display_frame, label, (x1, y1 - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
-            # Draw counting lines and counts for IP Camera
-            # cv2.line(ipcam_display_frame, (0, LINE_A_Y), (640, LINE_A_Y), (0, 255, 0), 2)
-            # cv2.putText(ipcam_display_frame, "A", (5, LINE_A_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-            # cv2.line(ipcam_display_frame, (0, LINE_B_Y), (640, LINE_B_Y), (0, 0, 255), 2)
-            # cv2.putText(ipcam_display_frame, "B", (5, LINE_B_Y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+                cv2.rectangle(ipcam_display_frame, (x1_r, y1_r), (x2_r, y2_r), color, 2)
+                label = f"ID:{face_id} {track_data.get('name', 'Unk')}"
+                if track_data.get('status') and track_data.get('name', 'Unk') != 'Unknown': label += f" ({track_data.get('status')})"
+                cv2.putText(ipcam_display_frame, label, (x1_r, y1_r - 7), cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
+
             cv2.putText(ipcam_display_frame, f"IP IN: {IP_PERSONS_IN_COUNT}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
             cv2.putText(ipcam_display_frame, f"IP OUT: {IP_PERSONS_OUT_COUNT}", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
         else:
-            print("Warning: IP camera frame read failed. Marking as unavailable.")
-            if ip_camera is not None: ip_camera.release()
-            ip_camera_available = False
-            ipcam_display_frame = None
+            ip_camera_stream.stop(); ip_camera_available = False; ipcam_display_frame = None
 
-    # --- Display Logic & Exit Conditions ---
-    # (This part remains largely the same as your original, handling display of one or both frames)
-    if not webcam_available and not ip_camera_available and initial_webcam_intended and initial_ip_camera_intended :
-        print("Error: Both cameras are now unavailable. Exiting.")
-        break
-    # ... (other exit conditions for single camera failures)
+    # --- Display Logic ---
+    if not webcam_available and not ip_camera_available: # Both failed after initially being okay (or not)
+        if initial_webcam_intended or initial_ip_camera_intended: # If at least one was expected
+            print("Error: Both cameras are now unavailable. Exiting.")
+            break
+        else: # No cameras were ever available/intended
+             time.sleep(0.1) # Prevent busy loop if no cameras from start
+             if cv2.waitKey(1) & 0xFF == ord('q'): break # Allow q to quit
+             continue
+
 
     display_frame_final = None
     window_title = "Camera Feed"
     display_height, display_width_single = 480, 640
     black_frame = np.zeros((display_height, display_width_single, 3), dtype=np.uint8)
     
-    current_webcam_display_safe = webcam_display_frame if webcam_available and webcam_display_frame is not None else black_frame.copy()
-    current_ipcam_display_safe = ipcam_display_frame if ip_camera_available and ipcam_display_frame is not None else black_frame.copy()
+    # Use a copy of black_frame if a camera display frame is None
+    current_webcam_display_safe = webcam_display_frame if webcam_display_frame is not None else black_frame.copy()
+    current_ipcam_display_safe = ipcam_display_frame if ipcam_display_frame is not None else black_frame.copy()
 
+    # Ensure frames are of the correct display size (especially black_frame if used)
     if current_webcam_display_safe.shape[0] != display_height or current_webcam_display_safe.shape[1] != display_width_single:
-            current_webcam_display_safe = cv2.resize(current_webcam_display_safe, (display_width_single, display_height))
+        current_webcam_display_safe = cv2.resize(current_webcam_display_safe, (display_width_single, display_height))
     if current_ipcam_display_safe.shape[0] != display_height or current_ipcam_display_safe.shape[1] != display_width_single:
-            current_ipcam_display_safe = cv2.resize(current_ipcam_display_safe, (display_width_single, display_height))
+        current_ipcam_display_safe = cv2.resize(current_ipcam_display_safe, (display_width_single, display_height))
 
     if initial_webcam_intended and initial_ip_camera_intended:
         display_frame_final = np.hstack((current_webcam_display_safe, current_ipcam_display_safe))
-        window_title = 'Webcam (Counting & Reco) | IP Cam (Reco)'
+        window_title = 'Webcam | IP Cam'
     elif initial_webcam_intended:
         display_frame_final = current_webcam_display_safe
-        window_title = 'Webcam Feed (Counting & Recognition)'
+        window_title = 'Webcam Feed'
     elif initial_ip_camera_intended:
         display_frame_final = current_ipcam_display_safe
-        window_title = 'IP Camera Feed (Recognition)'
+        window_title = 'IP Camera Feed'
     
     if display_frame_final is not None and display_frame_final.size > 0 :
-        update_latest_frame(display_frame_final)
+        update_latest_frame_flask(display_frame_final) # For Flask stream
         cv2.imshow(window_title, display_frame_final)
-    else:
-        update_latest_frame(None)
-        # This case might occur if both cams fail but one wasn't initially intended,
-        # or if no camera was intended from the start.
+    else: # Should only happen if no camera was ever intended
+        update_latest_frame_flask(None)
+        # If no camera was ever intended, we might not want a window at all,
+        # but if one was intended and then failed, we might show "failed"
         if not (initial_webcam_intended or initial_ip_camera_intended):
-            pass # No window if no camera was ever intended/available
-        elif not (webcam_available or ip_camera_available): # Both failed but at least one was intended
-             cv2.imshow("All Cameras Failed", np.zeros((100,300,3), dtype=np.uint8))
+            pass # No window if no camera was ever available
+        else: # At least one camera was intended but now all are None
+            cv2.imshow("Cameras Failed", np.zeros((100,300,3), dtype=np.uint8))
 
 
     if cv2.waitKey(1) & 0xFF == ord('q'):
         break
 
 # --- Cleanup ---
-if webcam is not None and webcam.isOpened():
-    webcam.release()
-if ip_camera is not None and ip_camera.isOpened():
-    ip_camera.release()
+print("Exiting main loop. Cleaning up...")
+if webcam_stream: webcam_stream.stop()
+if ip_camera_stream: ip_camera_stream.stop()
 cv2.destroyAllWindows()
+# Note: Flask thread is daemon, will exit when main thread exits.
 print("Script finished.")
