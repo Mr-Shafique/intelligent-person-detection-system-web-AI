@@ -21,7 +21,7 @@ OUTPUT_DIR = 'capturedfaces'
 DETECTION_LOG_FILE = "detectionlog.json" # Not actively used for writing in this version, but kept for reference
 RECOGNITION_THRESHOLD = 0.4 # Cosine distance; lower is more similar.
 RECOGNITION_RE_MATCH_THRESHOLD = 0.3 # Slightly more lenient for re-matching from recently_lost_cache
-PROCESS_EVERY_N_FRAMES = 5  # Process every Nth frame for detection & recognition. HIGHER = SMOOTHER VISUALS, LESS FREQUENT UPDATES.
+PROCESS_EVERY_N_FRAMES = 2  # Process every Nth frame for detection & recognition. HIGHER = SMOOTHER VISUALS, LESS FREQUENT UPDATES.
 FACE_CLASS_ID = 0 # Assuming class 0 is 'face' for yolov8n-face.pt
 RECENTLY_LOST_TIMEOUT_SECONDS = 10 # How long to keep a face in the 'recently_lost' cache
 
@@ -212,6 +212,24 @@ def log_detection_event(person_cmsId, person_name, action, camera_source_input, 
     except Exception as e:
         print(f"Error sending detection log to backend: {e}")
 
+def save_and_log_event_async(frame_to_save, output_dir, base_filename_prefix, action_taken, cms_id, person_name, camera_source, person_status, event_timestamp):
+    """
+    Saves an image and logs the event asynchronously.
+    """
+    img_fn = None
+    if frame_to_save is not None:
+        filename_ts = int(event_timestamp * 1000)
+        img_fn = os.path.join(output_dir, f"{base_filename_prefix}_{action_taken}_{filename_ts}.jpg")
+        try:
+            cv2.imwrite(img_fn, frame_to_save)
+            print(f"Saved: {img_fn}")
+        except Exception as e:
+            print(f"Error saving image {img_fn}: {e}")
+            img_fn = None # Ensure img_fn is None if saving failed
+    
+    # Log event regardless of image saving success, but pass actual img_fn
+    log_detection_event(cms_id, person_name, action_taken, camera_source, img_fn, person_status)
+
 # --- Camera Initialization ---
 webcam_src = 0
 ip_camera_url = "http://10.102.138.230:8080/video"
@@ -354,11 +372,16 @@ while True:
                         if track['crossed_B_pending_A'] and curr_cy >= LINE_B_Y: track['crossed_B_pending_A'] = False
                         
                         if action_taken:
+                            event_time = time.time()
                             print(f"ID {best_match_id} ({track.get('name', 'Unknown')}) COUNTED {action_taken}. Total IN: {PERSONS_IN_COUNT}, Total OUT: {PERSONS_OUT_COUNT}")
-                            img_fn = os.path.join(OUTPUT_DIR, f"{('recognized_' + str(track['cmsId'])) if track.get('cmsId') else 'unknown_webcam'}_{action_taken}_{int(time.time() * 1000)}.jpg")
-                            try: cv2.imwrite(img_fn, frame_webcam_original); print(f"Saved: {img_fn}")
-                            except Exception as e: print(f"Err saving {img_fn}: {e}"); img_fn = None
-                            log_detection_event(track.get('cmsId'), track.get('name'), action_taken, "webcam", img_fn, track.get('status'))
+                            
+                            frame_copy_for_saving = frame_webcam_original.copy() if frame_webcam_original is not None else None
+                            filename_prefix = f"{('recognized_' + str(track['cmsId'])) if track.get('cmsId') else 'unknown_webcam'}"
+                            
+                            threading.Thread(target=save_and_log_event_async, args=(
+                                frame_copy_for_saving, OUTPUT_DIR, filename_prefix, action_taken,
+                                track.get('cmsId'), track.get('name'), "webcam", track.get('status'), event_time
+                            )).start()
                         current_detections_data[det_idx] = None # Mark as matched
                 
                 current_detections_data = [d for d in current_detections_data if d is not None] # Filter out matched
@@ -501,11 +524,16 @@ while True:
                         if track['crossed_B_pending_A'] and curr_cy >= LINE_B_Y: track['crossed_B_pending_A'] = False
 
                         if action_taken:
+                            event_time_ip = time.time()
                             print(f"[IPCAM] ID {best_match_id} ({track.get('name', 'Unknown')}) COUNTED {action_taken}. Total IN: {IP_PERSONS_IN_COUNT}, Total OUT: {IP_PERSONS_OUT_COUNT}")
-                            img_fn = os.path.join(OUTPUT_DIR, f"{('ipcam_recognized_' + str(track['cmsId'])) if track.get('cmsId') else 'ipcam_unknown'}_{action_taken}_{int(time.time() * 1000)}.jpg")
-                            try: cv2.imwrite(img_fn, frame_ip_original); print(f"Saved IP: {img_fn}") # Save original frame
-                            except Exception as e: print(f"Err saving IP {img_fn}: {e}"); img_fn = None
-                            log_detection_event(track.get('cmsId'), track.get('name'), action_taken, "ipcam", img_fn, track.get('status'))
+                            
+                            frame_copy_for_saving_ip = frame_ip_original.copy() if frame_ip_original is not None else None
+                            filename_prefix_ip = f"{('ipcam_recognized_' + str(track['cmsId'])) if track.get('cmsId') else 'ipcam_unknown'}"
+
+                            threading.Thread(target=save_and_log_event_async, args=(
+                                frame_copy_for_saving_ip, OUTPUT_DIR, filename_prefix_ip, action_taken,
+                                track.get('cmsId'), track.get('name'), "ipcam", track.get('status'), event_time_ip
+                            )).start()
                         current_detections_data_ip[det_idx] = None
                 
                 current_detections_data_ip = [d for d in current_detections_data_ip if d is not None]
