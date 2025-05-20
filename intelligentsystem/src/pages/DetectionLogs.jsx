@@ -15,8 +15,12 @@ const DetectionLogs = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [dateFilter, setDateFilter] = useState('');
 
-  useEffect(() => {
+    useEffect(() => {
     fetchLogs();
+    const interval = setInterval(() => {
+      fetchLogs();
+    }, 5000);
+    return () => clearInterval(interval);
   }, []);
 
   const fetchLogs = async () => {
